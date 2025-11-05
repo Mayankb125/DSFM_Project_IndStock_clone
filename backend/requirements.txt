@@ -1,0 +1,7 @@
+Flask
+Flask-CORS
+yfinance
+pandas
+APScheduler
+python-dotenv
+requests
