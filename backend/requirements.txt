@@ -5,3 +5,6 @@ pandas
 APScheduler
 python-dotenv
 requests
+numpy
+transformers
+torch

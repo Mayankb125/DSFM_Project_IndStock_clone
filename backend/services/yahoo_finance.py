@@ -7,14 +7,24 @@ class YahooFinanceService:
     
     def __init__(self):
         # ==========================================
-        # 🔧 CHANGE YOUR 3 STOCKS HERE
+        # NIFTY 50 CONSTITUENTS (static list, update as needed)
+        # Set self.stocks to this list to fetch all 50 names
         # ==========================================
-        self.stocks = [
-            'RELIANCE.NS',  # ← Change Stock 1 here
-            'TCS.NS',       # ← Change Stock 2 here
-            'INFY.NS'       # ← Change Stock 3 here
-        
+        self.nifty50_constituents = [
+            'RELIANCE.NS','TCS.NS','INFY.NS','HDFCBANK.NS','ICICIBANK.NS','ITC.NS','LT.NS','SBIN.NS','BHARTIARTL.NS','AXISBANK.NS',
+            'KOTAKBANK.NS','HCLTECH.NS','WIPRO.NS','ASIANPAINT.NS','HINDUNILVR.NS','MARUTI.NS','SUNPHARMA.NS','ULTRACEMCO.NS','BAJAJFINSV.NS','BAJFINANCE.NS',
+            'ADANIENT.NS','ADANIPORTS.NS','TITAN.NS','NESTLEIND.NS','TATASTEEL.NS','JSWSTEEL.NS','POWERGRID.NS','NTPC.NS','COALINDIA.NS','M&M.NS',
+            'TATAMOTORS.NS','EICHERMOT.NS','HEROMOTOCO.NS','CIPLA.NS','DRREDDY.NS','BRITANNIA.NS','DIVISLAB.NS','HDFCLIFE.NS','SBILIFE.NS','GRASIM.NS',
+            'SHREECEM.NS','BPCL.NS','HINDALCO.NS','ONGC.NS','APOLLOHOSP.NS','BAJAJ-AUTO.NS','TATACONSUM.NS','TECHM.NS','INDUSINDBK.NS','UPL.NS'
         ]
+
+        # Toggle: use full NIFTY 50 list
+        use_nifty50 = True
+
+        # Default small demo set (fallback)
+        demo_stocks = ['RELIANCE.NS','TCS.NS','INFY.NS']
+
+        self.stocks = self.nifty50_constituents if use_nifty50 else demo_stocks
         
         # ==========================================
         # 🔧 INDICES (Both Nifty 50 and Sensex)
@@ -28,10 +38,10 @@ class YahooFinanceService:
         # ==========================================
         self.historical_years = 20  # ← Change number of years here (default: 20)
         
-        print(f"✓ YahooFinanceService initialized")
+        print("[OK] YahooFinanceService initialized")
         print(f"  - Stocks: {len(self.stocks)}")
-        print(f"  - Indices: 2 (Nifty 50 + Sensex)")
-        print(f"  - Total: 5 symbols")
+        print("  - Indices: 2 (Nifty 50 + Sensex)")
+        print(f"  - Total symbols: {len(self.stocks) + 2}")
         print(f"  - Historical data: Last {self.historical_years} years")
     
     def get_stock_data(self, symbol):
@@ -53,14 +63,56 @@ class YahooFinanceService:
             # Get stock info
             info = ticker.info
             
-            # Extract current price (try multiple fields)
-            current_price = (
-                info.get('currentPrice') or 
-                info.get('regularMarketPrice') or 
-                info.get('previousClose', 0)
-            )
+            # Get recent history to determine last traded price and previous close
+            hist = ticker.history(period="5d", interval="1d")
             
-            previous_close = info.get('regularMarketPreviousClose') or info.get('previousClose', 0)
+            # Try to get intraday data for most recent price (if market is open)
+            try:
+                intraday = ticker.history(period="1d", interval="1m")
+                if not intraday.empty:
+                    # Use most recent intraday close as current price
+                    most_recent_price = float(intraday['Close'].iloc[-1])
+                else:
+                    most_recent_price = None
+            except:
+                most_recent_price = None
+            
+            # Determine current price and previous close
+            if not hist.empty and len(hist) >= 2:
+                # Use actual historical close prices
+                last_close = float(hist['Close'].iloc[-1])  # Most recent trading day close
+                previous_close = float(hist['Close'].iloc[-2])  # Day before that
+                
+                # Current price: prefer intraday if available, then live price, then last close
+                if most_recent_price is not None:
+                    current_price = most_recent_price
+                else:
+                    current_price = (
+                        info.get('regularMarketPrice') or  # Live price during market hours
+                        info.get('currentPrice') or        # Alternative live price
+                        last_close                         # Last close if market is closed
+                    )
+            else:
+                # Fallback to info fields if history is insufficient
+                if most_recent_price is not None:
+                    current_price = most_recent_price
+                else:
+                    current_price = (
+                        info.get('regularMarketPrice') or 
+                        info.get('currentPrice') or 
+                        info.get('previousClose', 0)
+                    )
+                previous_close = info.get('regularMarketPreviousClose') or info.get('previousClose', 0)
+                
+                # If we got a last close from history, use it
+                if not hist.empty:
+                    last_close = float(hist['Close'].iloc[-1])
+                    # If current_price equals previous_close, use last_close as current
+                    if current_price == previous_close:
+                        current_price = last_close
+                    # Update previous_close from history if available
+                    if len(hist) >= 2:
+                        previous_close = float(hist['Close'].iloc[-2])
             
             # Calculate change
             change = current_price - previous_close if previous_close > 0 else 0
@@ -93,11 +145,11 @@ class YahooFinanceService:
                 'currency': info.get('currency', 'INR')
             }
             
-            print(f"✓ {symbol}: ₹{data['price']} ({data['changePercent']:+.2f}%)")
+            print(f"[OK] {symbol}: {data['price']} ({data['changePercent']:+.2f}%)")
             return data
             
         except Exception as e:
-            print(f"✗ Error fetching {symbol}: {str(e)}")
+            print(f"[ERR] Error fetching {symbol}: {str(e)}")
             return None
     
     def get_all_stocks(self):
@@ -118,7 +170,7 @@ class YahooFinanceService:
             if data:
                 stocks_data.append(data)
         
-        print(f"\n✓ Successfully fetched {len(stocks_data)}/{len(self.stocks)} stocks")
+        print(f"\n[OK] Successfully fetched {len(stocks_data)}/{len(self.stocks)} stocks")
         return stocks_data
     
     def get_index_data(self, index_symbol):
@@ -137,12 +189,57 @@ class YahooFinanceService:
             ticker = yf.Ticker(index_symbol)
             info = ticker.info
             
-            current_price = (
-                info.get('regularMarketPrice') or 
-                info.get('previousClose', 0)
-            )
+            # Get recent history to determine last traded price and previous close
+            hist = ticker.history(period="5d", interval="1d")
             
-            previous_close = info.get('regularMarketPreviousClose') or info.get('previousClose', 0)
+            # Try to get intraday data for most recent price (if market is open)
+            # Use 5m interval for indices as 1m might not be available
+            try:
+                intraday = ticker.history(period="1d", interval="5m")
+                if not intraday.empty:
+                    # Use most recent intraday close as current price
+                    most_recent_price = float(intraday['Close'].iloc[-1])
+                else:
+                    most_recent_price = None
+            except:
+                most_recent_price = None
+            
+            # Determine current price and previous close
+            if not hist.empty and len(hist) >= 2:
+                # Use actual historical close prices
+                last_close = float(hist['Close'].iloc[-1])  # Most recent trading day close
+                previous_close = float(hist['Close'].iloc[-2])  # Day before that
+                
+                # Current price: prefer intraday if available, then live price, then last close
+                if most_recent_price is not None:
+                    current_price = most_recent_price
+                else:
+                    current_price = (
+                        info.get('regularMarketPrice') or  # Live price during market hours
+                        info.get('currentPrice') or        # Alternative live price
+                        last_close                         # Last close if market is closed
+                    )
+            else:
+                # Fallback to info fields if history is insufficient
+                if most_recent_price is not None:
+                    current_price = most_recent_price
+                else:
+                    current_price = (
+                        info.get('regularMarketPrice') or 
+                        info.get('currentPrice') or 
+                        info.get('previousClose', 0)
+                    )
+                previous_close = info.get('regularMarketPreviousClose') or info.get('previousClose', 0)
+                
+                # If we got a last close from history, use it
+                if not hist.empty:
+                    last_close = float(hist['Close'].iloc[-1])
+                    # If current_price equals previous_close, use last_close as current
+                    if current_price == previous_close:
+                        current_price = last_close
+                    # Update previous_close from history if available
+                    if len(hist) >= 2:
+                        previous_close = float(hist['Close'].iloc[-2])
             
             change = current_price - previous_close if previous_close > 0 else 0
             change_percent = (change / previous_close * 100) if previous_close > 0 else 0
@@ -166,11 +263,11 @@ class YahooFinanceService:
                 'lastUpdate': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             }
             
-            print(f"✓ {data['name']}: {data['price']} ({data['changePercent']:+.2f}%)")
+            print(f"[OK] {data['name']}: {data['price']} ({data['changePercent']:+.2f}%)")
             return data
             
         except Exception as e:
-            print(f"✗ Error fetching index: {str(e)}")
+            print(f"[ERR] Error fetching index: {str(e)}")
             return None
     
     def get_nifty50_data(self):
@@ -198,7 +295,7 @@ class YahooFinanceService:
         }
         
         success_count = sum(1 for v in indices_data.values() if v is not None)
-        print(f"\n✓ Successfully fetched {success_count}/2 indices")
+        print(f"\n[OK] Successfully fetched {success_count}/2 indices")
         
         return indices_data
     
@@ -221,7 +318,7 @@ class YahooFinanceService:
         }
         
         print("\n" + "="*60)
-        print(f"✓ Total data fetched:")
+        print("[OK] Total data fetched:")
         print(f"  - Stocks: {len(all_data['stocks'])}")
         print(f"  - Indices: 2 (Nifty 50 + Sensex)")
         print("="*60)
@@ -254,7 +351,7 @@ class YahooFinanceService:
             hist = ticker.history(period=period, interval=interval)
             
             if hist.empty:
-                print(f"✗ No historical data found for {symbol}")
+                print(f"[ERR] No historical data found for {symbol}")
                 return []
             
             # Convert DataFrame to list of dictionaries
@@ -270,12 +367,12 @@ class YahooFinanceService:
                     'volume': int(row['Volume'])
                 })
             
-            print(f"✓ Fetched {len(historical)} data points for {symbol} ({period})")
+            print(f"[OK] Fetched {len(historical)} data points for {symbol} ({period})")
             print(f"  Date range: {historical[0]['date']} to {historical[-1]['date']}")
             return historical
             
         except Exception as e:
-            print(f"✗ Error fetching historical data: {str(e)}")
+            print(f"[ERR] Error fetching historical data: {str(e)}")
             return []
     
     def get_all_historical_data(self):
@@ -344,18 +441,18 @@ class YahooFinanceService:
                     # Save to CSV
                     df.to_csv(filepath, index=False)
                     
-                    print(f"✓ Saved to: {filepath}")
+                    print(f"[OK] Saved to: {filepath}")
                     print(f"  Records: {len(historical)}")
                     print(f"  Date range: {historical[0]['date']} to {historical[-1]['date']}")
                 else:
-                    print(f"✗ No data available for {symbol}")
+                    print(f"[ERR] No data available for {symbol}")
                     
             except Exception as e:
-                print(f"✗ Error downloading {symbol}: {str(e)}")
+                print(f"[ERR] Error downloading {symbol}: {str(e)}")
         
         print("\n" + "="*60)
-        print("✓ Download complete!")
-        print(f"✓ 5 CSV files saved in: {output_dir}/")
+        print("[OK] Download complete!")
+        print(f"[OK] 5 CSV files saved in: {output_dir}/")
         print("="*60)
     
     def get_intraday_data(self, symbol, period='1d', interval='5m'):
