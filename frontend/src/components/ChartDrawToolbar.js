@@ -12,7 +12,16 @@ const tools = [
 
 export default function ChartDrawToolbar({ activeTool, onSelectTool }) {
   return (
-    <div className="absolute left-4 top-1/2 -translate-y-1/2 flex flex-col gap-2 z-[100] pointer-events-auto">
+    <div 
+      className="absolute left-4 top-1/2 -translate-y-1/2 flex flex-col gap-2 z-[100] pointer-events-auto"
+      style={{ 
+        position: 'absolute',
+        left: '16px',
+        top: '50%',
+        transform: 'translateY(-50%)',
+        zIndex: 100
+      }}
+    >
       {tools.map((tool) => {
         const Icon = tool.icon;
         return (
