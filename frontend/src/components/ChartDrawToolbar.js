@@ -12,7 +12,7 @@ const tools = [
 
 export default function ChartDrawToolbar({ activeTool, onSelectTool }) {
   return (
-    <div className="absolute left-4 top-1/2 -translate-y-1/2 flex flex-col gap-2 z-50">
+    <div className="absolute left-4 top-1/2 -translate-y-1/2 flex flex-col gap-2 z-[100] pointer-events-auto">
       {tools.map((tool) => {
         const Icon = tool.icon;
         return (
@@ -20,10 +20,10 @@ export default function ChartDrawToolbar({ activeTool, onSelectTool }) {
             key={tool.id}
             onClick={() => onSelectTool(tool.id)}
             title={tool.label}
-            className={`p-3 rounded-lg shadow-lg hover:scale-105 transition-all duration-150 ${
+            className={`p-3 rounded-lg shadow-xl hover:scale-110 transition-all duration-150 border ${
               activeTool === tool.id
-                ? "bg-cyan-500 text-white"
-                : "bg-gray-800 text-gray-300 hover:bg-gray-700"
+                ? "bg-cyan-500 text-white border-cyan-400"
+                : "bg-gray-800 text-gray-200 hover:bg-gray-700 border-gray-700"
             }`}
           >
             <Icon size={18} />

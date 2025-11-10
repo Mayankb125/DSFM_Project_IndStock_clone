@@ -385,23 +385,21 @@ const StockPage = () => {
           {/* Chart */}
           <div className="flex-1 relative bg-[#0a0a0a] chart-container">
             {activeTab === 'chart' ? (
-              <div className="h-full relative">
+              <div className="h-full relative w-full">
                 <CandlestickChart symbol={symbol} />
+                <ChartDrawToolbar
+                  activeTool={activeDrawTool}
+                  onSelectTool={setActiveDrawTool}
+                />
                 {chartDimensions.width > 0 && chartDimensions.height > 0 && (
-                  <>
-                    <ChartDrawToolbar
-                      activeTool={activeDrawTool}
-                      onSelectTool={setActiveDrawTool}
-                    />
-                    <ChartCanvasOverlay
-                      width={chartDimensions.width}
-                      height={chartDimensions.height}
-                      activeTool={activeDrawTool}
-                      annotations={annotations}
-                      setAnnotations={setAnnotations}
-                      symbol={symbol}
-                    />
-                  </>
+                  <ChartCanvasOverlay
+                    width={chartDimensions.width}
+                    height={chartDimensions.height}
+                    activeTool={activeDrawTool}
+                    annotations={annotations}
+                    setAnnotations={setAnnotations}
+                    symbol={symbol}
+                  />
                 )}
               </div>
             ) : (
