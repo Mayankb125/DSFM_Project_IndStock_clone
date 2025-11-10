@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from "react";
-import { fabric } from "fabric";
+import { Canvas, Line, Rect, Textbox } from "fabric";
 import { v4 as uuidv4 } from "uuid";
 
 export default function ChartCanvasOverlay({
@@ -20,7 +20,7 @@ export default function ChartCanvasOverlay({
   useEffect(() => {
     if (!canvasRef.current) return;
 
-    const canvas = new fabric.Canvas(canvasRef.current, {
+    const canvas = new Canvas(canvasRef.current, {
       selection: activeTool === "select",
       preserveObjectStacking: true,
       backgroundColor: "transparent",
@@ -112,7 +112,7 @@ export default function ChartCanvasOverlay({
         isDrawingRef.current = true;
         startPointRef.current = pointer;
 
-        const line = new fabric.Line([pointer.x, pointer.y, pointer.x, pointer.y], {
+        const line = new Line([pointer.x, pointer.y, pointer.x, pointer.y], {
           stroke: "#0ea5e9",
           strokeWidth: 2,
           selectable: false,
@@ -153,7 +153,7 @@ export default function ChartCanvasOverlay({
         isDrawingRef.current = true;
         startPointRef.current = pointer;
 
-        const rect = new fabric.Rect({
+        const rect = new Rect({
           left: pointer.x,
           top: pointer.y,
           width: 0,
@@ -203,7 +203,7 @@ export default function ChartCanvasOverlay({
     if (activeTool === "hline") {
       canvas.on("mouse:down", (opt) => {
         const pointer = canvas.getPointer(opt.e);
-        const line = new fabric.Line([0, pointer.y, canvas.getWidth(), pointer.y], {
+        const line = new Line([0, pointer.y, canvas.getWidth(), pointer.y], {
           stroke: "#ef4444",
           strokeWidth: 1,
           selectable: true,
@@ -219,7 +219,7 @@ export default function ChartCanvasOverlay({
     if (activeTool === "text") {
       canvas.on("mouse:down", (opt) => {
         const pointer = canvas.getPointer(opt.e);
-        const text = new fabric.Textbox("Note", {
+        const text = new Textbox("Note", {
           left: pointer.x,
           top: pointer.y,
           fontSize: 14,
@@ -262,7 +262,7 @@ export default function ChartCanvasOverlay({
   function addAnnotation(canvas, ann) {
     try {
       if (ann.type === "trendline") {
-        const line = new fabric.Line(ann.coords, {
+        const line = new Line(ann.coords, {
           stroke: "#0ea5e9",
           strokeWidth: 2,
           selectable: true,
@@ -270,7 +270,7 @@ export default function ChartCanvasOverlay({
         line.annotationId = ann.id;
         canvas.add(line);
       } else if (ann.type === "rect") {
-        const rect = new fabric.Rect({
+        const rect = new Rect({
           left: ann.coords[0],
           top: ann.coords[1],
           width: ann.coords[2],
@@ -285,7 +285,7 @@ export default function ChartCanvasOverlay({
       } else if (ann.type === "hline") {
         const canvasWidth = canvas.getWidth();
         const y = ann.coords[1] || ann.coords[3] || 0;
-        const line = new fabric.Line([0, y, canvasWidth, y], {
+        const line = new Line([0, y, canvasWidth, y], {
           stroke: "#ef4444",
           strokeWidth: 1,
           selectable: true,
@@ -293,7 +293,7 @@ export default function ChartCanvasOverlay({
         line.annotationId = ann.id;
         canvas.add(line);
       } else if (ann.type === "text") {
-        const text = new fabric.Textbox(ann.text || "Note", {
+        const text = new Textbox(ann.text || "Note", {
           left: ann.coords[0],
           top: ann.coords[1],
           fontSize: 14,
