@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { TrendingUp, TrendingDown, ChevronLeft, MessageSquare, Moon, User, Search, LayoutGrid, ShoppingCart, Briefcase, Target, Gavel, Wallet, FileText, LogOut, Settings, Bell, Maximize2, MoreVertical } from 'lucide-react';
 import CandlestickChart from '../components/CandlestickChart';
+import ChartDrawToolbar from '../components/ChartDrawToolbar';
+import ChartCanvasOverlay from '../components/ChartCanvasOverlay';
 
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
 
@@ -14,6 +16,9 @@ const StockPage = () => {
   const [loading, setLoading] = useState(true);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [activeTab, setActiveTab] = useState('chart');
+  const [activeDrawTool, setActiveDrawTool] = useState('select');
+  const [annotations, setAnnotations] = useState([]);
+  const [chartDimensions, setChartDimensions] = useState({ width: 0, height: 0 });
 
   const getShort = (s) => s.replace('.NS','').replace('.BO','');
 
@@ -60,6 +65,47 @@ const StockPage = () => {
     };
     fetchData();
   }, [symbol]);
+
+  // Load annotations from localStorage when symbol changes
+  useEffect(() => {
+    if (symbol) {
+      try {
+        const saved = localStorage.getItem(`annotations_${symbol}`);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          setAnnotations(parsed);
+        } else {
+          setAnnotations([]);
+        }
+      } catch (e) {
+        console.error('Error loading annotations:', e);
+        setAnnotations([]);
+      }
+    }
+  }, [symbol]);
+
+  // Measure chart container dimensions
+  useEffect(() => {
+    const updateDimensions = () => {
+      const chartContainer = document.querySelector('.chart-container');
+      if (chartContainer) {
+        setChartDimensions({
+          width: chartContainer.clientWidth,
+          height: chartContainer.clientHeight || 600,
+        });
+      }
+    };
+
+    updateDimensions();
+    window.addEventListener('resize', updateDimensions);
+    // Also update after a short delay to ensure chart is rendered
+    const timeout = setTimeout(updateDimensions, 500);
+
+    return () => {
+      window.removeEventListener('resize', updateDimensions);
+      clearTimeout(timeout);
+    };
+  }, [activeTab, symbol]);
 
   const navItems = [
     { icon: LayoutGrid, label: 'WATCHLIST', active: true },
@@ -126,7 +172,7 @@ const StockPage = () => {
           </div>
 
           <div className="flex-1 overflow-y-auto">
-            {loading ? (
+              {loading ? (
               [...Array(6)].map((_, i) => (
                 <div key={i} className="px-3 py-2.5 border-b border-gray-800">
                   <div className="h-12 bg-gray-800 rounded animate-pulse" />
@@ -160,11 +206,11 @@ const StockPage = () => {
                     </div>
                   </div>
                 </div>
-              ))
-            )}
+                ))
+              )}
           </div>
-        </div>
-      </div>
+            </div>
+          </div>
 
       {/* Main Content */}
       <div className="flex-1 flex flex-col">
@@ -178,7 +224,7 @@ const StockPage = () => {
                   <span className="text-xs">IND</span>
                 </div>
                 <div>
-                  {indices.nifty50 && (
+            {indices.nifty50 && (
                     <>
                       <div className="flex items-center gap-2">
                         <span className="text-sm">NIFTY 50</span>
@@ -211,8 +257,8 @@ const StockPage = () => {
                       {indices.sensex.changePercent >= 0 ? '▲' : '▼'} {Math.abs(indices.sensex.changePercent).toFixed(2)}%
                     </span>
                   </div>
-                </div>
-              )}
+              </div>
+            )}
 
               <button 
                 className="p-1 hover:bg-gray-800 rounded"
@@ -311,7 +357,7 @@ const StockPage = () => {
                   <div className={`text-sm ${currentStock.changePercent >= 0 ? 'text-green-500' : 'text-red-500'}`}>
                     {currentStock.change >= 0 ? '+' : ''}{currentStock.change.toFixed(2)}
                   </div>
-                </div>
+                    </div>
               </div>
             </div>
           )}
@@ -337,10 +383,26 @@ const StockPage = () => {
           </div>
 
           {/* Chart */}
-          <div className="flex-1 relative bg-[#0a0a0a]">
+          <div className="flex-1 relative bg-[#0a0a0a] chart-container">
             {activeTab === 'chart' ? (
-              <div className="h-full">
+              <div className="h-full relative">
                 <CandlestickChart symbol={symbol} />
+                {chartDimensions.width > 0 && chartDimensions.height > 0 && (
+                  <>
+                    <ChartDrawToolbar
+                      activeTool={activeDrawTool}
+                      onSelectTool={setActiveDrawTool}
+                    />
+                    <ChartCanvasOverlay
+                      width={chartDimensions.width}
+                      height={chartDimensions.height}
+                      activeTool={activeDrawTool}
+                      annotations={annotations}
+                      setAnnotations={setAnnotations}
+                      symbol={symbol}
+                    />
+                  </>
+                )}
               </div>
             ) : (
               <div className="p-6 text-gray-400">

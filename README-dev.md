@@ -265,12 +265,46 @@ rm backend/cache/stock_data.json
 ### Frontend
 - `REACT_APP_API_URL` - Backend API URL (default: `http://localhost:5000/api`)
 
+## Drawing Tools Usage
+
+The StockPage includes a client-side drawing toolbar that allows you to annotate charts:
+
+### Features
+
+- **Select Tool**: Click and drag to select/move existing annotations
+- **Trendline**: Draw diagonal trendlines on the chart
+- **Horizontal Line**: Draw horizontal support/resistance lines
+- **Rectangle**: Draw rectangular areas (e.g., price ranges)
+- **Text**: Add text notes anywhere on the chart
+- **Erase**: Click on any annotation to delete it
+
+### How to Use
+
+1. Navigate to a stock page (e.g., `/stock/RELIANCE.NS`)
+2. Click on the Chart tab if not already selected
+3. Use the vertical toolbar on the left side of the chart to select a drawing tool
+4. Draw directly on the chart:
+   - **Trendline/Rectangle**: Click and drag to draw
+   - **Horizontal Line**: Click once to place a horizontal line
+   - **Text**: Click to place a text box, then type your note
+   - **Erase**: Click on any annotation to remove it
+5. Annotations are automatically saved to localStorage per stock symbol
+6. Your drawings will persist when you reload the page or return to the same stock
+
+### Technical Details
+
+- All annotations are stored client-side in `localStorage` with key `annotations_<symbol>`
+- No backend API calls are made for drawing functionality
+- Uses `fabric.js` for canvas drawing and manipulation
+- Annotations are serialized to JSON format for storage
+
 ## Next Steps
 
 - Review the codebase structure
 - Check API documentation in `backend/app.py`
 - Explore components in `frontend/src/components/`
 - Run smoke tests to verify setup
+- Try the drawing tools on different stock charts
 
 ## Support
 
