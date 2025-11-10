@@ -385,16 +385,24 @@ const StockPage = () => {
           {/* Chart */}
           <div className="flex-1 relative bg-[#0a0a0a] chart-container overflow-hidden">
             {activeTab === 'chart' ? (
-              <div className="h-full relative w-full" style={{ position: 'relative' }}>
-                <CandlestickChart symbol={symbol} />
-                <div style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', zIndex: 100, pointerEvents: 'none' }}>
-                  <div style={{ pointerEvents: 'auto' }}>
-                    <ChartDrawToolbar
-                      activeTool={activeDrawTool}
-                      onSelectTool={setActiveDrawTool}
-                    />
-                  </div>
+              <div className="h-full relative w-full" style={{ position: 'relative', minHeight: '400px' }}>
+                {/* Toolbar - positioned relative to chart container, not affected by chart loading */}
+                <div 
+                  className="absolute"
+                  style={{ 
+                    left: '16px', 
+                    top: '50%', 
+                    transform: 'translateY(-50%)',
+                    zIndex: 100,
+                    pointerEvents: 'auto'
+                  }}
+                >
+                  <ChartDrawToolbar
+                    activeTool={activeDrawTool}
+                    onSelectTool={setActiveDrawTool}
+                  />
                 </div>
+                <CandlestickChart symbol={symbol} />
                 {chartDimensions.width > 0 && chartDimensions.height > 0 && (
                   <ChartCanvasOverlay
                     width={chartDimensions.width}
