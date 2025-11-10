@@ -21,7 +21,7 @@ const Dashboard = () => {
   const [analysisError, setAnalysisError] = useState('');
   const [analysis, setAnalysis] = useState(null);
 
-  const API_URL = 'http://localhost:5000/api';
+  const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
 
   // Fetch data from backend
   const fetchData = async () => {
