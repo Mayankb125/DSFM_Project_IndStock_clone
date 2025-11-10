@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { TrendingUp, TrendingDown, ChevronLeft, MessageSquare, Moon, User, Search, LayoutGrid, ShoppingCart, Briefcase, Target, Gavel, Wallet, FileText, LogOut, Settings, Bell, Maximize2, MoreVertical } from 'lucide-react';
 import CandlestickChart from '../components/CandlestickChart';
@@ -19,6 +19,7 @@ const StockPage = () => {
   const [activeDrawTool, setActiveDrawTool] = useState('select');
   const [annotations, setAnnotations] = useState([]);
   const [chartDimensions, setChartDimensions] = useState({ width: 0, height: 0 });
+  const chartContainerRef = useRef(null);
 
   const getShort = (s) => s.replace('.NS','').replace('.BO','');
 
@@ -87,22 +88,31 @@ const StockPage = () => {
   // Measure chart container dimensions
   useEffect(() => {
     const updateDimensions = () => {
-      const chartContainer = document.querySelector('.chart-container');
-      if (chartContainer) {
+      if (chartContainerRef.current) {
+        const rect = chartContainerRef.current.getBoundingClientRect();
         setChartDimensions({
-          width: chartContainer.clientWidth,
-          height: chartContainer.clientHeight || 600,
+          width: rect.width,
+          height: rect.height || 600,
         });
       }
     };
 
     updateDimensions();
     window.addEventListener('resize', updateDimensions);
+    // Use ResizeObserver to detect container size changes
+    let resizeObserver;
+    if (chartContainerRef.current && window.ResizeObserver) {
+      resizeObserver = new ResizeObserver(updateDimensions);
+      resizeObserver.observe(chartContainerRef.current);
+    }
     // Also update after a short delay to ensure chart is rendered
-    const timeout = setTimeout(updateDimensions, 500);
+    const timeout = setTimeout(updateDimensions, 100);
 
     return () => {
       window.removeEventListener('resize', updateDimensions);
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      }
       clearTimeout(timeout);
     };
   }, [activeTab, symbol]);
@@ -243,7 +253,7 @@ const StockPage = () => {
                 </div>
               </div>
 
-              {indices.sensex && (
+            {indices.sensex && (
                 <div className="border-l border-gray-700 pl-6">
                   <div className="flex items-center gap-2">
                     <span className="text-sm">SENSEX</span>
@@ -383,10 +393,14 @@ const StockPage = () => {
           </div>
 
           {/* Chart */}
-          <div className="flex-1 relative bg-[#0a0a0a] chart-container overflow-hidden">
+          <div 
+            ref={chartContainerRef}
+            className="flex-1 relative bg-[#0a0a0a] chart-container overflow-hidden"
+          >
             {activeTab === 'chart' ? (
-              <div className="h-full relative w-full" style={{ position: 'relative', minHeight: '400px' }}>
-                {/* Toolbar - positioned relative to chart container, not affected by chart loading */}
+              <div className="h-full relative w-full" style={{ position: 'relative' }}>
+                <CandlestickChart symbol={symbol} />
+                {/* Toolbar - fixed position relative to chart container */}
                 <div 
                   className="absolute"
                   style={{ 
@@ -394,7 +408,8 @@ const StockPage = () => {
                     top: '50%', 
                     transform: 'translateY(-50%)',
                     zIndex: 100,
-                    pointerEvents: 'auto'
+                    pointerEvents: 'auto',
+                    position: 'absolute'
                   }}
                 >
                   <ChartDrawToolbar
@@ -402,7 +417,6 @@ const StockPage = () => {
                     onSelectTool={setActiveDrawTool}
                   />
                 </div>
-                <CandlestickChart symbol={symbol} />
                 {chartDimensions.width > 0 && chartDimensions.height > 0 && (
                   <ChartCanvasOverlay
                     width={chartDimensions.width}
