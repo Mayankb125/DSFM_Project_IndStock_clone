@@ -20,10 +20,14 @@ const CandlestickChart = ({ symbol }) => {
 
     chartRef.current = createChart(container, {
       width: container.clientWidth,
-      height: 380,
-      layout: { background: { color: '#ffffff' }, textColor: '#333' },
-      rightPriceScale: { visible: true },
-      timeScale: { timeVisible: true, secondsVisible: false },
+      height: container.clientHeight || 600,
+      layout: { background: { color: '#0a0a0a' }, textColor: '#888' },
+      rightPriceScale: { visible: true, borderColor: '#333' },
+      timeScale: { timeVisible: true, secondsVisible: false, borderColor: '#333' },
+      grid: {
+        vertLines: { color: '#1a1a1a' },
+        horzLines: { color: '#1a1a1a' }
+      },
       // hide the default TradingView watermark
       watermark: { visible: false }
     });
@@ -36,7 +40,10 @@ const CandlestickChart = ({ symbol }) => {
 
     const handleResize = () => {
       if (chartRef.current && container) {
-        chartRef.current.applyOptions({ width: container.clientWidth });
+        chartRef.current.applyOptions({ 
+          width: container.clientWidth,
+          height: container.clientHeight || 600
+        });
       }
     };
     window.addEventListener('resize', handleResize);
@@ -58,7 +65,8 @@ const CandlestickChart = ({ symbol }) => {
       setAdjustedInterval(null);
       try {
         // Call backend with selected period and interval
-        const url = `http://localhost:5000/api/historical/${encodeURIComponent(symbol)}?period=${encodeURIComponent(period)}&interval=${encodeURIComponent(interval)}`;
+        const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
+        const url = `${API_URL}/historical/${encodeURIComponent(symbol)}?period=${encodeURIComponent(period)}&interval=${encodeURIComponent(interval)}`;
         const res = await fetch(url);
         if (!res.ok) {
           const text = await res.text().catch(() => '');
@@ -116,7 +124,8 @@ const CandlestickChart = ({ symbol }) => {
       setLoading(true);
       setError(null);
       try {
-        const url = `http://localhost:5000/api/historical/${encodeURIComponent(symbol)}?period=${encodeURIComponent(period)}&interval=${encodeURIComponent(interval)}`;
+        const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
+        const url = `${API_URL}/historical/${encodeURIComponent(symbol)}?period=${encodeURIComponent(period)}&interval=${encodeURIComponent(interval)}`;
         const res = await fetch(url);
         if (!res.ok) {
           const text = await res.text().catch(() => '');
@@ -152,64 +161,17 @@ const CandlestickChart = ({ symbol }) => {
   }, [period, interval, symbol]);
 
   return (
-    <div className="bg-white rounded-2xl p-6 shadow-sm">
-      <div className="flex items-center justify-between mb-4">
-        <div>
-          <h3 className="text-lg font-semibold">{symbol} — Candlestick</h3>
-          <div className="text-sm text-gray-500">Range: {period} · Interval: {interval}</div>
-          {adjustedInterval && (
-            <div className="text-xs text-yellow-600">Interval adjusted by server to: {adjustedInterval}</div>
-          )}
-        </div>
-
-        <div className="flex items-center gap-2">
-          {/* Period select */}
-          <select
-            value={period}
-            onChange={(e) => setPeriod(e.target.value)}
-            className="border rounded px-2 py-1 text-sm"
-            title="Select time range"
-          >
-            <option value="1d">1 day</option>
-            <option value="5d">5 days</option>
-            <option value="7d">7 days</option>
-            <option value="1mo">1 month</option>
-            <option value="3mo">3 months</option>
-            <option value="6mo">6 months</option>
-            <option value="1y">1 year</option>
-            <option value="2y">2 years</option>
-            <option value="5y">5 years</option>
-            <option value="10y">10 years</option>
-            <option value="20y">20 years</option>
-            <option value="max">Max</option>
-          </select>
-
-          {/* Interval select */}
-          <select
-            value={interval}
-            onChange={(e) => setInterval(e.target.value)}
-            className="border rounded px-2 py-1 text-sm"
-            title="Select data interval / granularity"
-          >
-            <option value="1m">1 minute</option>
-            <option value="2m">2 minutes</option>
-            <option value="5m">5 minutes</option>
-            <option value="15m">15 minutes</option>
-            <option value="30m">30 minutes</option>
-            <option value="60m">1 hour</option>
-            <option value="90m">90 minutes</option>
-            <option value="1d">1 day</option>
-            <option value="1wk">1 week</option>
-            <option value="1mo">1 month</option>
-          </select>
-
-          {loading && <div className="text-sm text-gray-500">Loading…</div>}
-        </div>
-      </div>
+    <div className="w-full h-full bg-[#0a0a0a] relative">
       {error ? (
-        <div className="text-red-600">{error}</div>
+        <div className="text-red-500 p-4">{error}</div>
       ) : (
-        <div ref={chartContainerRef} style={{ width: '100%', height: 380 }} />
+        <div ref={chartContainerRef} style={{ width: '100%', height: '100%' }} />
+      )}
+      {loading && (
+        <div className="absolute top-4 right-4 text-xs text-gray-400">Loading…</div>
+      )}
+      {adjustedInterval && (
+        <div className="absolute top-4 left-4 text-xs text-yellow-500">Interval adjusted: {adjustedInterval}</div>
       )}
     </div>
   );
