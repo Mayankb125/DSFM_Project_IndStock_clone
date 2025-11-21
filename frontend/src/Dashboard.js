@@ -6,6 +6,14 @@ import Heatmap from './components/Heatmap';
 import SentimentCards from './components/SentimentCards';
 import PredictionBadges from './components/PredictionBadges';
 import Sparkline from './components/Sparkline';
+import VolatilityPanel from './components/VolatilityPanel';
+import EigenHistogram from './components/EigenHistogram';
+import EigenSpectrum from './components/EigenSpectrum';
+import StressGauge from './components/StressGauge';
+import RmtInterpretation from './components/RmtInterpretation';
+import TrainModelPanel from './components/TrainModelPanel';
+import InsightsCard from './components/InsightsCard';
+import Plot from 'react-plotly.js';
 
 const Dashboard = () => {
   const navigate = useNavigate();
@@ -20,6 +28,14 @@ const Dashboard = () => {
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [analysisError, setAnalysisError] = useState('');
   const [analysis, setAnalysis] = useState(null);
+  // Hybrid forecast state
+  const [hybridLoading, setHybridLoading] = useState(false);
+  const [hybridError, setHybridError] = useState('');
+  const [hybridData, setHybridData] = useState(null);
+  const [hybridP, setHybridP] = useState(1);
+  const [hybridD, setHybridD] = useState(0);
+  const [hybridQ, setHybridQ] = useState(1);
+  const [hybridTicker, setHybridTicker] = useState(null);
 
   const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
 
@@ -56,40 +72,70 @@ const Dashboard = () => {
     setAnalysis(null);
     setAnalysisError('');
     setAnalysisLoading(true);
+    // Accept either array of tickers or options object from TickerSelector
+    let opts = {};
+    if (Array.isArray(tickers)) {
+      opts.tickers = tickers;
+    } else if (typeof tickers === 'object' && tickers !== null) {
+      opts = { ...tickers };
+    }
     try {
-      const body = (obj) => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(obj) });
-      const start = undefined; // optional
-      const end = undefined; // optional
+  const body = (obj) => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(obj) });
+  const start = opts.start;
+  const end = opts.end;
+  const alpha = opts.alpha ?? 0.3;
+  const windowSize = opts.windowSize ?? 60;
+  const useNews = opts.useNews ?? true;
+  const tickersList = opts.tickers || [];
 
       // Prices and returns
-      const pricesRes = await fetch(`${API_URL}/prices`, body({ tickers, start, end }));
+  const pricesRes = await fetch(`${API_URL}/prices`, body({ tickers: tickersList, start, end }));
       const prices = await pricesRes.json();
       if (!prices.success) throw new Error(prices.message || 'Prices failed');
 
       // Correlations
-      const corrRes = await fetch(`${API_URL}/correlations`, body({ tickers, start, end }));
+  const corrRes = await fetch(`${API_URL}/correlations`, body({ tickers: tickersList, start, end }));
       const correlations = await corrRes.json();
       if (!correlations.success) throw new Error(correlations.message || 'Correlations failed');
 
-      // RMT
-      const T = (prices.returns?.[tickers[0]] || []).length;
-      const N = tickers.length;
-      const rmtRes = await fetch(`${API_URL}/rmt`, body({ correlation: correlations.correlation, T, N }));
+    // RMT - compute T (time series length) from the returned returns object and N from tickersList
+    const returnsObj = prices.returns || {};
+    const firstReturnsArr = Object.values(returnsObj)[0] || [];
+    const T = firstReturnsArr.length;
+    const N = tickersList.length;
+    // ensure correlation matrix exists
+    const corrMatrix = (correlations && correlations.correlation) ? correlations.correlation : null;
+    if (!corrMatrix || T <= 0 || N <= 0) throw new Error('Missing correlation matrix or invalid T/N for RMT');
+    const rmtRes = await fetch(`${API_URL}/rmt`, body({ correlation: corrMatrix, T, N }));
       const rmt = await rmtRes.json();
       if (!rmt.success) throw new Error(rmt.message || 'RMT failed');
 
       // Sentiment-adjusted correlations (includes news + sentiment)
-      const adjRes = await fetch(`${API_URL}/sentiment-adjusted-corr`, body({ tickers, start, end, lookback_days: 7, alpha: 0.3 }));
+  const adjRes = await fetch(`${API_URL}/sentiment-adjusted-corr`, body({ tickers: tickersList, start, end, lookback_days: 7, alpha }));
       const adjusted = await adjRes.json();
       if (!adjusted.success) throw new Error(adjusted.message || 'Adjusted corr failed');
 
       // Predictions
-      const predRes = await fetch(`${API_URL}/predict`, body({ tickers, start, end, lookback_days: 7 }));
+      const predRes = await fetch(`${API_URL}/predict`, body({ tickers: tickersList, start, end, lookback_days: 7 }));
       const predictions = await predRes.json();
       if (!predictions.success) throw new Error(predictions.message || 'Predict failed');
 
+      // Call volatility predict endpoint (uses persisted model if available)
+      let volResult = null;
+      try {
+        const volRes = await fetch(`${API_URL}/predict-volatility`, body({ tickers: tickersList, start, end, sentiments: adjusted.sentiment }));
+        const volJson = await volRes.json();
+        if (volJson.success) volResult = volJson.result;
+      } catch (e) {
+        // non-fatal
+        console.warn('Volatility predict failed', e);
+      }
+
+      // Optionally trigger training (async) - commented out by default
+      // await fetch(`${API_URL}/train-volatility`, body({ tickers: tickersList, start, end, label_pct: 0.75 }));
+
       const result = {
-        tickers,
+        tickers: tickersList,
         prices: prices.prices,
         returns: prices.returns,
         correlations: {
@@ -111,6 +157,7 @@ const Dashboard = () => {
         },
         predictions: predictions.predictions
       };
+      if (volResult) result.volatility = volResult;
       setAnalysis(result);
     } catch (err) {
       console.error('Analysis error', err);
@@ -255,15 +302,220 @@ const Dashboard = () => {
               <div className="space-y-6 mb-8">
                 {/* Heatmaps */}
                 <div className="flex flex-col gap-4">
-                  <Heatmap title="Correlation (raw)" tickers={analysis.correlations.tickers} matrix={analysis.correlations.raw} />
-                  <Heatmap title="Correlation (sentiment-adjusted)" tickers={analysis.adjusted_correlation.tickers} matrix={analysis.adjusted_correlation.adjusted} />
+                  <div className="bg-white rounded-2xl p-4 shadow-sm">
+                    <Heatmap title="Correlation (raw)" tickers={analysis.correlations.tickers} matrix={analysis.correlations.raw} />
+                  </div>
+                  <div className="bg-white rounded-2xl p-4 shadow-sm">
+                    <Heatmap title="Correlation (sentiment-adjusted)" tickers={analysis.adjusted_correlation.tickers} matrix={analysis.adjusted_correlation.adjusted} />
+                  </div>
+                </div>
+
+                {/* Quick heuristic insights (polished card) */}
+                <div className="mt-4">
+                  <InsightsCard analysis={analysis} />
+                </div>
+
+                {/* RMT visuals: histogram, spectrum, gauge */}
+                <div className="flex items-center gap-4 mb-4">
+                  <nav className="text-sm text-gray-600">
+                    <button className="px-3 py-1 mr-2 rounded-full hover:bg-gray-100">Correlation + RMT Analyzer</button>
+                    <button className="px-3 py-1 mr-2 rounded-full hover:bg-gray-100">Eigenvalue Spectrum</button>
+                    <button className="px-3 py-1 mr-2 rounded-full hover:bg-gray-100">Volatility Prediction</button>
+                  </nav>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <EigenHistogram eigenvalues={analysis.rmt.eigenvalues} lambda_max={analysis.rmt.lambda_max} />
+                  <EigenSpectrum eigenvalues={analysis.rmt.eigenvalues} />
+                  <div className="space-y-4">
+                    <StressGauge lambda1={analysis.rmt.eigenvalues ? Math.max(...analysis.rmt.eigenvalues) : null} lambda2={analysis.rmt.eigenvalues ? (analysis.rmt.eigenvalues.length>1? analysis.rmt.eigenvalues.sort((a,b)=>b-a)[1]:0) : null} lambda_max={analysis.rmt.lambda_max} />
+                    <RmtInterpretation rmt={analysis.rmt} />
+                  </div>
                 </div>
 
                 {/* Predictions */}
-                <PredictionBadges predictions={analysis.predictions} />
+                {/* Beginner-friendly explanation: what the predictions mean and where they come from */}
+                <div className="bg-white rounded-2xl p-4 shadow-sm mb-4">
+                  <div className="text-sm text-gray-700">
+                    <strong>Quick guide for beginners:</strong> The small predictions above are quick signals combining recent price momentum and news sentiment (a lightweight heuristic). The "Volatility Prediction" panel uses a RandomForest baseline trained on historical data — its accuracy is shown above. If accuracy is low (e.g., 25%), treat model outputs as exploratory and prefer the heuristic signals or add more training data.
+                  </div>
+                </div>
+                <PredictionBadges predictions={analysis.predictions} modelInfo={analysis.model_info} />
+
+                {/* Volatility */}
+                <div className="mt-4">
+                  <VolatilityPanel volatility={analysis.volatility} modelInfo={analysis.model_info} />
+                </div>
+
+                {/* Hybrid ARIMA + GARCH Forecast */}
+                <div className="bg-white rounded-2xl p-6 shadow-sm">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-lg font-semibold">Hybrid ARIMA + GARCH Forecast</h3>
+                      <div className="text-sm text-gray-500">ARIMA predicts the mean return (direction), GARCH predicts volatility (risk). Together they form a hybrid model that forecasts both expected move and expected uncertainty for the next trading day.</div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-2">
+                        <label className="text-sm text-gray-600">Ticker</label>
+                        <select value={hybridTicker || (analysis.tickers && analysis.tickers[0])} onChange={e=>setHybridTicker(e.target.value)} className="px-2 py-1 border rounded">
+                          {(analysis.tickers||[]).map(t => <option key={t} value={t}>{t}</option>)}
+                        </select>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <label className="text-sm text-gray-600">p</label>
+                        <select value={hybridP} onChange={e=>setHybridP(Number(e.target.value))} className="px-2 py-1 border rounded">
+                          {[0,1,2,3].map(v => <option key={v} value={v}>{v}</option>)}
+                        </select>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <label className="text-sm text-gray-600">d</label>
+                        <select value={hybridD} onChange={e=>setHybridD(Number(e.target.value))} className="px-2 py-1 border rounded">
+                          {[0,1,2].map(v => <option key={v} value={v}>{v}</option>)}
+                        </select>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <label className="text-sm text-gray-600">q</label>
+                        <select value={hybridQ} onChange={e=>setHybridQ(Number(e.target.value))} className="px-2 py-1 border rounded">
+                          {[0,1,2,3].map(v => <option key={v} value={v}>{v}</option>)}
+                        </select>
+                      </div>
+                      <button onClick={async ()=>{
+                        // trigger hybrid forecast
+                        setHybridError('');
+                        setHybridData(null);
+                        setHybridLoading(true);
+                        const symbol = hybridTicker || (analysis.tickers && analysis.tickers[0]);
+                        const start = analysis.dates && analysis.dates.length ? analysis.dates[0] : '';
+                        const end = analysis.dates && analysis.dates.length ? analysis.dates[analysis.dates.length-1] : '';
+                        try{
+                          const q = new URLSearchParams({ symbol, start, end, p: hybridP, d: hybridD, q: hybridQ }).toString();
+                          const res = await fetch(`${API_URL}/hybrid_forecast?${q}`);
+                          const j = await res.json();
+                          if(!j.success) throw new Error(j.message || 'Hybrid forecast failed');
+                          setHybridData(j);
+                        }catch(err){
+                          console.error('Hybrid error', err);
+                          setHybridError(err.message || 'Error');
+                        }finally{
+                          setHybridLoading(false);
+                        }
+                      }} className="px-4 py-2 bg-blue-600 text-white rounded">Run Hybrid Forecast</button>
+                    </div>
+                  </div>
+
+                  <div className="mt-4">
+                    {hybridLoading && <div className="text-sm text-gray-600">Computing hybrid forecast…</div>}
+                    {hybridError && <div className="text-sm text-red-600">{hybridError}</div>}
+
+                    {hybridData && (
+                      <div>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                          <div className="p-4 border rounded-lg">
+                            <div className="text-xs text-gray-500">Next-day ARIMA predicted return</div>
+                            <div className="mt-1 font-semibold text-xl">{hybridData.arima_return_forecast.toFixed(4)}%</div>
+                          </div>
+                          <div className="p-4 border rounded-lg">
+                            <div className="text-xs text-gray-500">Next-day GARCH predicted volatility</div>
+                            <div className="mt-1 font-semibold text-xl">{hybridData.garch_vol_forecast.toFixed(4)}%</div>
+                          </div>
+                          <div className="p-4 border rounded-lg">
+                            <div className="text-xs text-gray-500">95% hybrid confidence interval</div>
+                            <div className="mt-1 font-semibold text-xl">{hybridData.hybrid_confidence_lower.toFixed(4)}% → {hybridData.hybrid_confidence_upper.toFixed(4)}%</div>
+                          </div>
+                        </div>
+
+                        {/* Plotly chart: historical returns, ARIMA predicted return (horizontal), historical sigma, next-day sigma marker, CI shaded band */}
+                        <div>
+                          <Plot
+                            data={(() => {
+                              const symbol = hybridData.symbol;
+                              // historical returns (percent)
+                              const histR = (hybridData.returns || []).map(r => r * 100.0);
+                              const dates = hybridData.dates || [];
+                              const sigma = hybridData.conditional_vol_series || [];
+                              const arimaLine = {
+                                x: [dates[0], dates[dates.length-1]],
+                                y: [hybridData.arima_return_forecast, hybridData.arima_return_forecast],
+                                type: 'scatter', mode: 'lines', name: 'ARIMA mean (pct)', line: { dash: 'dash', color: '#8B00FF' } // magenta for prediction
+                              };
+                              const returnsTrace = { x: dates, y: histR, type: 'scatter', mode: 'lines', name: 'Historical returns (%)', line: { color: '#2563eb' }, yaxis: 'y1' };
+                              const sigmaTrace = { x: dates, y: sigma, type: 'scatter', mode: 'lines', name: 'GARCH σ(t) (%)', line: { color: 'orange' }, yaxis: 'y2' };
+                              const sigmaNextMarker = {
+                                x: [dates[dates.length-1]],
+                                y: [hybridData.garch_vol_forecast],
+                                type: 'scatter', mode: 'markers+text', name: 'Next σ forecast', marker: { color: 'red', size: 10 }, text: ['σₜ+1'], textposition: 'top center', yaxis: 'y2'
+                              };
+
+                              // confidence band as filled trace (use dates first and last to create rectangular band)
+                              const ciLower = hybridData.hybrid_confidence_lower;
+                              const ciUpper = hybridData.hybrid_confidence_upper;
+                              const bandTrace = {
+                                x: [dates[0], dates[dates.length-1], dates[dates.length-1], dates[0]],
+                                y: [ciLower, ciLower, ciUpper, ciUpper],
+                                fill: 'toself', fillcolor: 'rgba(139,0,255,0.12)', line: { color: 'rgba(0,0,0,0)' }, name: '95% CI (next day)'
+                              };
+
+                              // predicted return marker at next trading day
+                              let nextReturnMarker = null;
+                              try {
+                                const last = dates[dates.length-1];
+                                const nd = new Date(last);
+                                nd.setDate(nd.getDate() + 1);
+                                const nds = nd.toISOString().slice(0,10);
+                                nextReturnMarker = {
+                                  x: [nds],
+                                  y: [hybridData.arima_return_forecast],
+                                  type: 'scatter', mode: 'markers+text', name: 'Predicted return (next day)', marker: { color: '#8B00FF', size: 10 }, text: ['r̂ₜ+1'], textposition: 'top center'
+                                };
+                              } catch(e) { nextReturnMarker = null }
+
+                              const traces = [returnsTrace, arimaLine, bandTrace, sigmaTrace, sigmaNextMarker];
+                              if (nextReturnMarker) traces.push(nextReturnMarker);
+                              return traces;
+                            })()}
+                            layout={{
+                              autosize: true,
+                              margin: { t: 30, r: 40, l: 50, b: 40 },
+                              xaxis: { title: 'Date' },
+                              yaxis: { title: 'Returns (%)', side: 'left' },
+                              yaxis2: { title: 'Volatility (%)', overlaying: 'y', side: 'right' },
+                              legend: { orientation: 'h' }
+                            }}
+                            style={{ width: '100%', height: '420px' }}
+                            config={{ responsive: true }}
+                          />
+                        </div>
+
+                        {/* Insights card */}
+                        <div className="mt-3 p-3 bg-yellow-50 border rounded text-sm text-gray-800">
+                          <strong>Insight:</strong> {
+                            (() => {
+                              try{
+                                const ar = hybridData.arima_return_forecast; // percent
+                                const vol = hybridData.garch_vol_forecast; // percent
+                                const histSigma = (hybridData.conditional_vol_series||[]).slice(-30);
+                                const median = histSigma.length ? histSigma.sort((a,b)=>a-b)[Math.floor(histSigma.length/2)] : vol;
+                                if (Math.abs(ar) < 0.05) return 'Neutral expectation';
+                                if (ar > 0 && vol < median) return 'Mild bullish with low risk';
+                                if (ar > 0 && vol >= median) return 'Bullish but high uncertainty';
+                                if (ar < 0 && vol >= median) return 'Bearish & risky';
+                                return 'Neutral expectation';
+                              }catch(e){ return 'No insight available'; }
+                            })()
+                          }
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
 
                 {/* Sentiment */}
                 <SentimentCards sentiments={analysis.sentiment} examples={analysis.adjusted_correlation.examples} />
+
+                {/* Train model panel */}
+                <div className="mt-4">
+                  <TrainModelPanel tickers={analysis.tickers} start={null} end={null} sentiments={analysis.sentiment} />
+                </div>
 
                 {/* Mini sparklines */}
                 <div className="bg-white rounded-2xl p-6 shadow-sm">

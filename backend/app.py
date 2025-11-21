@@ -29,6 +29,39 @@ from services.sentiment import analyze_texts
 from dotenv import load_dotenv
 import numpy as np
 import pandas as pd
+# volatility_model may be intentionally removed in some distributions (placeholder removed).
+# Import it if available; otherwise provide safe placeholders and a flag so endpoints can
+# return informative errors instead of crashing the whole server during import.
+VOLATILITY_AVAILABLE = True
+try:
+    from volatility_model import build_dataset, train_random_forest, save_model, load_model, predict_from_recent
+except Exception as e:
+    # Module missing or intentionally removed. Provide fallbacks that raise when used.
+    VOLATILITY_AVAILABLE = False
+    def _missing(*args, **kwargs):
+        raise ImportError('volatility_model module not available: ' + str(e))
+    build_dataset = _missing
+    train_random_forest = _missing
+    save_model = _missing
+    load_model = _missing
+    predict_from_recent = _missing
+from services.analytics import marchenko_pastur_bounds
+ARCH_AVAILABLE = True
+STATS_AVAILABLE = True
+try:
+    from arch import arch_model
+except Exception as _e:
+    ARCH_AVAILABLE = False
+    def arch_model(*args, **kwargs):
+        raise ImportError('arch package not installed or importable')
+
+try:
+    from statsmodels.tsa.arima.model import ARIMA
+except Exception as _e:
+    STATS_AVAILABLE = False
+    class ARIMA:
+        def __init__(self, *a, **k):
+            raise ImportError('statsmodels not installed or importable')
 
 load_dotenv()
 app = Flask(__name__)
@@ -584,6 +617,14 @@ def api_analyze():
             },
             'predictions': predictions
         }
+        # include model info if available
+        try:
+            metrics_path = os.path.join(os.path.dirname(__file__), 'models', 'volatility_metrics.json')
+            if os.path.exists(metrics_path):
+                with open(metrics_path, 'r') as mf:
+                    payload['model_info'] = json.load(mf)
+        except Exception:
+            pass
         return jsonify(payload)
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
@@ -651,6 +692,318 @@ def api_predict():
             }
 
         return jsonify({'success': True, 'predictions': predictions})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/train-volatility', methods=['POST'])
+def api_train_volatility():
+    body = request.get_json(force=True, silent=True) or {}
+    tickers = body.get('tickers') or []
+    start = body.get('start')
+    end = body.get('end')
+    label_pct = float(body.get('label_pct', 0.75))
+    model_name = body.get('model_name', 'volatility_rf.joblib')
+    sentiments = body.get('sentiments') or None
+
+    if not isinstance(tickers, list) or len(tickers) < 2:
+        return jsonify({'success': False, 'message': 'tickers must be a list of at least 2'}), 400
+
+    if not VOLATILITY_AVAILABLE:
+        return jsonify({'success': False, 'message': 'volatility_model module not available on server; train-volatility is disabled'}), 501
+
+    try:
+        X, y = build_dataset(tickers, start, end, sentiments, label_pct=label_pct)
+        model, metrics = train_random_forest(X, y)
+        model_path = save_model(model, name=model_name)
+        # persist metrics to disk alongside model for frontend introspection
+        try:
+            metrics_path = os.path.join(os.path.dirname(model_path), 'volatility_metrics.json')
+            with open(metrics_path, 'w') as mf:
+                json.dump(metrics, mf, indent=2)
+        except Exception as _e:
+            print(f"Warning: failed to save metrics file: {_e}")
+        return jsonify({'success': True, 'metrics': metrics, 'model_path': model_path})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/eigen-timeseries', methods=['POST'])
+def api_eigen_timeseries():
+    """Compute rolling eigenvalues (λ1, λ2) and spread for tickers over date range and window."""
+    body = request.get_json(force=True, silent=True) or {}
+    tickers = body.get('tickers') or []
+    start = body.get('start')
+    end = body.get('end')
+    window = int(body.get('window', 60))
+
+    if not isinstance(tickers, list) or len(tickers) < 2:
+        return jsonify({'success': False, 'message': 'tickers must be a list of at least 2'}), 400
+
+    try:
+        adj = fetch_adjusted_close(tickers, start=start, end=end)
+        rets = compute_log_returns(adj)
+        dates = rets.index
+        lambda1_series = []
+        lambda2_series = []
+        spreads = []
+        out_dates = []
+        for i in range(window, len(dates)):
+            window_rets = rets.iloc[i - window: i]
+            if window_rets.shape[0] < 2:
+                continue
+            corr = compute_correlation_matrix(window_rets)
+            eigvals = np.linalg.eigvalsh(corr.values)
+            eig_sorted = np.sort(eigvals)[::-1]
+            l1 = float(eig_sorted[0])
+            l2 = float(eig_sorted[1]) if len(eig_sorted) > 1 else 0.0
+            lambda1_series.append(l1)
+            lambda2_series.append(l2)
+            spreads.append(l1 - l2)
+            out_dates.append(dates[i].strftime('%Y-%m-%d'))
+
+        # compute mp bounds using T=window, N=len(tickers)
+        T = window
+        N = len(tickers)
+        lambda_min, lambda_max = marchenko_pastur_bounds(T=T, N=N)
+
+        return jsonify({'success': True, 'dates': out_dates, 'lambda1': lambda1_series, 'lambda2': lambda2_series, 'spread': spreads, 'lambda_min': lambda_min, 'lambda_max': lambda_max})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/warmup-sentiment', methods=['POST'])
+def api_warmup_sentiment():
+    """Warm-up FinBERT pipeline to reduce latency on first real request."""
+    try:
+        from services.sentiment import _load_pipeline
+        _load_pipeline()
+        return jsonify({'success': True, 'message': 'FinBERT warmup complete'})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/predict-volatility', methods=['POST'])
+def api_predict_volatility():
+    body = request.get_json(force=True, silent=True) or {}
+    tickers = body.get('tickers') or []
+    start = body.get('start')
+    end = body.get('end')
+    model_name = body.get('model_name', 'volatility_rf.joblib')
+    sentiments = body.get('sentiments') or None
+
+    if not isinstance(tickers, list) or len(tickers) < 2:
+        return jsonify({'success': False, 'message': 'tickers must be a list of at least 2'}), 400
+
+    if not VOLATILITY_AVAILABLE:
+        return jsonify({'success': False, 'message': 'volatility_model module not available on server; predict-volatility is disabled'}), 501
+
+    try:
+        model = load_model(name=model_name)
+        result = predict_from_recent(tickers, start, end, model, sentiments=sentiments)
+        # try to load persisted metrics if present
+        metrics = None
+        try:
+            metrics_path = os.path.join(os.path.dirname(__file__), 'models', 'volatility_metrics.json')
+            if os.path.exists(metrics_path):
+                with open(metrics_path, 'r') as mf:
+                    metrics = json.load(mf)
+        except Exception:
+            metrics = None
+        return jsonify({'success': True, 'result': result, 'model_info': metrics})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/garch_volatility', methods=['GET'])
+def api_garch_volatility():
+    """Compute GARCH(1,1) conditional volatility and 1-step forecast for a single symbol.
+    Query params: symbol (required), start (optional), end (optional)
+    """
+    symbol = request.args.get('symbol')
+    start = request.args.get('start')
+    end = request.args.get('end')
+    if not symbol:
+        return jsonify({'success': False, 'message': 'symbol query parameter is required'}), 400
+    if not ARCH_AVAILABLE:
+        return jsonify({'success': False, 'message': 'arch package not installed on server; garch_volatility disabled'}), 501
+    try:
+        # fetch adjusted close for single symbol
+        adj = fetch_adjusted_close([symbol], start=start, end=end)
+        if adj is None or adj.empty or symbol not in adj.columns:
+            return jsonify({'success': False, 'message': f'No price data for {symbol}'}), 404
+
+        # compute daily log returns
+        rets = compute_log_returns(adj)
+        series = rets[symbol].dropna()
+        if series.shape[0] < 10:
+            return jsonify({'success': False, 'message': 'Not enough data to fit GARCH (need at least 10 observations)'}), 400
+
+        # fit GARCH(1,1)
+        am = arch_model(series * 100.0, vol='GARCH', p=1, q=1)  # scale to percent to improve numeric stability
+        res = am.fit(disp='off')
+
+        # conditional volatility (in percent) -- arch returns vol in same units as series
+        sigma_t = res.conditional_volatility.tolist()
+
+        # forecast 1-step variance
+        forecast = res.forecast(horizon=1)
+        try:
+            # forecast.variance is a DataFrame-like; extract last row, first col
+            fv = forecast.variance.values
+            forecast_variance = [float(x) for x in fv.flatten().tolist()]
+            next_var = float(fv[-1, 0])
+        except Exception:
+            # fallback
+            next_var = float(forecast.variance.iloc[-1, 0])
+            forecast_variance = [float(v) for v in forecast.variance.iloc[:, 0].tolist()]
+
+        vol_next = float(next_var ** 0.5)
+
+        # model summary
+        try:
+            model_summary = res.summary().as_text()
+        except Exception:
+            model_summary = str(res)
+
+        # dates aligned to series index
+        dates = [d.strftime('%Y-%m-%d') for d in series.index]
+
+        # convert sigma_t and forecast_variance to floats (they are percent since we scaled by 100)
+        historical_vol = [float(v) for v in sigma_t]
+        forecast_variance = [float(v) for v in forecast_variance]
+
+        # compute simple insights
+        insights = {}
+        try:
+            import numpy as _np
+            median_vol = float(_np.median(historical_vol)) if historical_vol else 0.0
+            if vol_next > 2 * median_vol:
+                insights['summary'] = 'High volatility expected tomorrow.'
+            elif vol_next < median_vol:
+                insights['summary'] = 'Market is stable.'
+            else:
+                insights['summary'] = 'No significant change predicted.'
+
+            # sudden spike detection: compare last sigma to median
+            last_sigma = historical_vol[-1] if historical_vol else 0.0
+            if vol_next > 1.5 * median_vol and last_sigma > 1.5 * median_vol:
+                insights['note'] = 'Volatility clustering detected — risk increasing.'
+        except Exception:
+            insights = {}
+
+        payload = {
+            'success': True,
+            'symbol': symbol,
+            'dates': dates,
+            'historical_volatility': historical_vol,  # percent units
+            'next_day_volatility': vol_next,  # percent units
+            'forecast_variance': forecast_variance,
+            'model_summary': model_summary,
+            'insights': insights
+        }
+        return jsonify(payload)
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@app.route('/api/hybrid_forecast', methods=['GET'])
+def api_hybrid_forecast():
+    """Hybrid ARIMA (mean) + GARCH(1,1) (volatility) forecast for next day.
+    Query params: symbol (required), start (optional), end (optional), p,d,q (optional ARIMA order)
+    Returns JSON with returns series, arima forecast, garch vol forecast, CI and model summaries.
+    """
+    symbol = request.args.get('symbol')
+    start = request.args.get('start')
+    end = request.args.get('end')
+    try:
+        p = int(request.args.get('p', 1))
+        d = int(request.args.get('d', 0))
+        q = int(request.args.get('q', 1))
+    except Exception:
+        return jsonify({'success': False, 'message': 'Invalid p,d,q values'}), 400
+
+    if not symbol:
+        return jsonify({'success': False, 'message': 'symbol query parameter is required'}), 400
+    if not STATS_AVAILABLE:
+        return jsonify({'success': False, 'message': 'statsmodels not installed on server; ARIMA is unavailable'}), 501
+    if not ARCH_AVAILABLE:
+        return jsonify({'success': False, 'message': 'arch package not installed on server; GARCH is unavailable'}), 501
+
+    try:
+        # Fetch adjusted close for single symbol
+        adj = fetch_adjusted_close([symbol], start=start, end=end)
+        if adj is None or adj.empty or symbol not in adj.columns:
+            return jsonify({'success': False, 'message': f'No price data for {symbol}'}), 404
+
+        # compute daily log returns (decimal form)
+        rets = compute_log_returns(adj)
+        series = rets[symbol].dropna()
+        if series.shape[0] < 20:
+            return jsonify({'success': False, 'message': 'Not enough data to fit models (need at least 20 returns)'}), 400
+
+        # ---------------------- ARIMA (mean forecast) ----------------------
+        try:
+            arima_model = ARIMA(series, order=(p, d, q))
+            arima_res = arima_model.fit()
+            arima_fore = arima_res.forecast(steps=1)
+            arima_pred = float(arima_fore.iloc[0]) if hasattr(arima_fore, 'iloc') else float(arima_fore[0])
+            try:
+                arima_summary = arima_res.summary().as_text()
+            except Exception:
+                arima_summary = str(arima_res)
+        except Exception as e:
+            return jsonify({'success': False, 'message': f'ARIMA fit error: {e}'}), 500
+
+        # ---------------------- GARCH (volatility forecast) ----------------------
+        try:
+            # scale returns to percent for numeric stability (consistent with garch endpoint)
+            am = arch_model(series * 100.0, vol='GARCH', p=1, q=1)
+            garch_res = am.fit(disp='off')
+
+            sigma_t = garch_res.conditional_volatility.tolist()  # percent units
+            forecast = garch_res.forecast(horizon=1)
+            try:
+                fv = forecast.variance.values
+                next_var = float(fv[-1, 0])
+            except Exception:
+                next_var = float(forecast.variance.iloc[-1, 0])
+            sigma_next = float(next_var ** 0.5)
+            try:
+                garch_summary = garch_res.summary().as_text()
+            except Exception:
+                garch_summary = str(garch_res)
+        except Exception as e:
+            return jsonify({'success': False, 'message': f'GARCH fit error: {e}'}), 500
+
+        # ---------------------- Hybrid distribution and CI ----------------------
+        # Convert ARIMA prediction to percent (returns are decimals)
+        arima_pred_pct = arima_pred * 100.0
+
+        # Confidence interval using normal z (95% -> 1.96)
+        z95 = 1.96
+        ci_lower = arima_pred_pct - z95 * sigma_next
+        ci_upper = arima_pred_pct + z95 * sigma_next
+
+        # Prepare payload
+        dates = [d.strftime('%Y-%m-%d') for d in series.index]
+        returns_list = [float(v) for v in series.tolist()]
+
+        payload = {
+            'success': True,
+            'symbol': symbol,
+            'dates': dates,
+            'returns': returns_list,
+            'arima_return_forecast': arima_pred_pct,  # percent
+            'garch_vol_forecast': sigma_next,  # percent
+            'hybrid_confidence_lower': ci_lower,
+            'hybrid_confidence_upper': ci_upper,
+            'conditional_vol_series': [float(v) for v in sigma_t],
+            'arima_model_summary': arima_summary,
+            'garch_model_summary': garch_summary
+        }
+
+        return jsonify(payload)
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 

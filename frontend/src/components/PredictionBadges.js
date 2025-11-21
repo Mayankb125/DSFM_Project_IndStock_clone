@@ -12,6 +12,10 @@ const PredictionBadges = ({ predictions }) => {
   return (
     <div className="bg-white rounded-2xl p-6 shadow-sm">
       <h3 className="text-lg font-semibold mb-4">Predictions</h3>
+      {/* Model-based training UI removed — predictions are heuristic (momentum + sentiment) */}
+      <div className="mb-3 text-sm text-gray-700">
+        How to read this: predictions are a quick signal combining recent price momentum and news sentiment. Treat them as supplemental ideas, not investment advice. Hover any label for more info.
+      </div>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {tickers.map(t => (
           <div key={t} className="border rounded-xl p-4">

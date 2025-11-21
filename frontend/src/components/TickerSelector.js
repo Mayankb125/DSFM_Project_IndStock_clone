@@ -8,6 +8,11 @@ const DEFAULT_SUGGESTIONS = [
 const TickerSelector = ({ onAnalyze }) => {
   const [input, setInput] = useState('');
   const [tickers, setTickers] = useState([]);
+  const [alpha, setAlpha] = useState(0.3);
+  const [windowSize, setWindowSize] = useState(60);
+  const [useNews, setUseNews] = useState(true);
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
 
   const addTicker = (t) => {
     const sym = (t || input).trim().toUpperCase();
@@ -51,13 +56,37 @@ const TickerSelector = ({ onAnalyze }) => {
         ))}
       </div>
 
-      <button
-        onClick={() => onAnalyze(tickers)}
-        disabled={tickers.length < 4}
-        className={`px-5 py-2 rounded font-semibold ${tickers.length < 4 ? 'bg-gray-300 text-gray-600' : 'bg-green-600 text-white'}`}
-      >
-        Analyze
-      </button>
+      <div className="mt-4">
+        <div className="flex items-center gap-3 mb-3">
+          <label className="text-sm">α (sentiment weight):</label>
+          <input type="range" min="0" max="1" step="0.05" value={alpha} onChange={(e) => setAlpha(parseFloat(e.target.value))} />
+          <span className="text-sm w-12">{alpha.toFixed(2)}</span>
+        </div>
+
+        <div className="flex items-center gap-3 mb-3">
+          <label className="text-sm">Window (days):</label>
+          <input type="range" min="20" max="252" step="1" value={windowSize} onChange={(e) => setWindowSize(parseInt(e.target.value))} />
+          <span className="text-sm w-12">{windowSize}</span>
+        </div>
+
+        <div className="flex items-center gap-3 mb-3">
+          <label className="text-sm">Use news for sentiment:</label>
+          <input type="checkbox" checked={useNews} onChange={(e) => setUseNews(e.target.checked)} />
+        </div>
+
+        <div className="flex gap-2 mb-3">
+          <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="border rounded px-3 py-2" />
+          <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="border rounded px-3 py-2" />
+        </div>
+
+        <button
+          onClick={() => onAnalyze({ tickers, alpha, windowSize, useNews, start: startDate || undefined, end: endDate || undefined })}
+          disabled={tickers.length < 2}
+          className={`px-5 py-2 rounded font-semibold ${tickers.length < 2 ? 'bg-gray-300 text-gray-600' : 'bg-green-600 text-white'}`}
+        >
+          Analyze
+        </button>
+      </div>
     </div>
   );
 };

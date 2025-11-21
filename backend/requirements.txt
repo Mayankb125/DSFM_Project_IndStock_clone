@@ -8,3 +8,5 @@ requests
 numpy
 transformers
 torch
+arch
+statsmodels
