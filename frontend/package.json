@@ -11,6 +11,7 @@
     "fabric": "^6.9.0",
     "lightweight-charts": "^4.0.0",
     "lucide-react": "^0.546.0",
+    "plotly.js": "^3.3.0",
     "plotly.js-dist-min": "^2.35.3",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
