@@ -98,12 +98,12 @@ load_cache_from_file()
 # Update cache immediately on startup
 update_cache()
 
-# Schedule automatic updates every 30 seconds
+# Schedule automatic updates every 15 minutes
 scheduler = BackgroundScheduler()
-scheduler.add_job(func=update_cache, trigger="interval", seconds=30)
+scheduler.add_job(func=update_cache, trigger="interval", minutes=15)
 scheduler.start()
 
-print("[INFO] Stock data updater scheduled (every 30 seconds)")
+print("[INFO] Stock data updater scheduled (every 15 minutes)")
 
 # ==================== API ROUTES ====================
 
@@ -674,7 +674,7 @@ if __name__ == '__main__':
     print("[INFO] Flask Stock API Server Starting...")
     print("=" * 50)
     print("[INFO] API at: http://localhost:5000")
-    print("[INFO] Stock data updates: Every 30 seconds")
+    print("[INFO] Stock data updates: Every 15 minutes")
     print("=" * 50)
     
     app.run(debug=True, host='0.0.0.0', port=5000)

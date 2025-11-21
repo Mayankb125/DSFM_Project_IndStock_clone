@@ -122,8 +122,8 @@ const Dashboard = () => {
 
   useEffect(() => {
     fetchData();
-    // Auto-refresh every 30 seconds
-    const interval = setInterval(fetchData, 30000);
+    // Auto-refresh every 15 minutes
+    const interval = setInterval(fetchData, 900000); // 15 minutes = 900000ms
     return () => clearInterval(interval);
   }, []);
 
@@ -469,7 +469,7 @@ const Dashboard = () => {
                   <strong>Tracking:</strong> {stocks.length} stocks + 2 indices
                 </p>
                 <p className="text-xs text-blue-700 mt-1">
-                  Data updates automatically every 30 seconds
+                  Data updates automatically every 15 minutes
                 </p>
               </div>
             </div>
