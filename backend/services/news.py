@@ -68,7 +68,7 @@ TICKER_QUERY_MAP = {
 def _fetch_newsapi(ticker: str, query: str, from_date: datetime, to_date: datetime, page_size: int, api_key: str) -> List[Dict[str, Any]]:
     """Fetch news from NewsAPI for a single ticker"""
     items: List[Dict[str, Any]] = []
-    headers = {"X-Api-Key": api_key}
+    # NewsAPI accepts apiKey as parameter (not header)
     params = {
         "q": query,
         "from": from_date.strftime('%Y-%m-%d'),
@@ -76,22 +76,28 @@ def _fetch_newsapi(ticker: str, query: str, from_date: datetime, to_date: dateti
         "language": "en",
         "sortBy": "publishedAt",
         "pageSize": min(max(page_size, 1), 20),
+        "apiKey": api_key
     }
     for attempt in range(3):
         try:
-            resp = requests.get(NEWSAPI_ENDPOINT, params=params, headers=headers, timeout=15)
-            resp.raise_for_status()
-            payload = resp.json()
-            articles = payload.get('articles', [])
-            for a in articles:
-                items.append({
-                    'title': a.get('title'),
-                    'snippet': a.get('description'),
-                    'published_at': a.get('publishedAt'),
-                    'url': a.get('url'),
-                    'source': a.get('source', {}).get('name')
-                })
-            break
+            resp = requests.get(NEWSAPI_ENDPOINT, params=params, timeout=15)
+            if resp.status_code == 200:
+                payload = resp.json()
+                articles = payload.get('articles', [])
+                for a in articles:
+                    items.append({
+                        'title': a.get('title'),
+                        'snippet': a.get('description'),
+                        'published_at': a.get('publishedAt'),
+                        'url': a.get('url'),
+                        'source': a.get('source', {}).get('name')
+                    })
+                break
+            elif resp.status_code == 401:
+                # Invalid API key - don't retry
+                break
+            else:
+                resp.raise_for_status()
         except requests.RequestException:
             if attempt < 2:
                 time.sleep(1.5 * (attempt + 1))
@@ -212,6 +218,10 @@ def fetch_news_for_tickers(tickers: List[str], lookback_days: int = 7, page_size
     newsapi_key = os.getenv('NEWSAPI_KEY')
     mediastack_key = os.getenv('MEDIASTACK_KEY') or os.getenv('APILAYER_KEY')
     twitter_bearer = os.getenv('TWITTER_BEARER_TOKEN')
+    
+    # Skip NewsAPI if key is empty/invalid
+    if newsapi_key and len(newsapi_key.strip()) < 10:
+        newsapi_key = None
     
     if not newsapi_key and not mediastack_key and not twitter_bearer:
         raise RuntimeError("At least one of NEWSAPI_KEY, MEDIASTACK_KEY, or TWITTER_BEARER_TOKEN must be set in environment")

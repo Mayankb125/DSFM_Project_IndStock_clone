@@ -10,10 +10,194 @@ import VolatilityPanel from './components/VolatilityPanel';
 import EigenHistogram from './components/EigenHistogram';
 import EigenSpectrum from './components/EigenSpectrum';
 import StressGauge from './components/StressGauge';
-import RmtInterpretation from './components/RmtInterpretation';
 import TrainModelPanel from './components/TrainModelPanel';
 import InsightsCard from './components/InsightsCard';
 import Plot from 'react-plotly.js';
+
+// Single entry inference generator
+// Accepts the analysis payload returned from /api/analyze (or /api/vol_diagnostics)
+// Returns structured inference object as specified in requirements
+export function generateInferences(payload) {
+  // Helper: safe access
+  const safe = (p, def = null) => (p === undefined || p === null ? def : p);
+
+  // Compute sample size (T) from returns if available
+  let sample_size = 0;
+  try {
+    const returnsObj = payload.returns || {};
+    const first = Object.values(returnsObj)[0] || [];
+    sample_size = Array.isArray(first) ? first.length : 0;
+  } catch (e) { sample_size = 0 }
+
+  // Raw correlation: compute mean absolute correlation from raw matrix
+  let mean_abs_corr = 0;
+  const corrMatrix = safe(payload.correlations && payload.correlations.raw, null) || null;
+  try {
+    if (corrMatrix && Array.isArray(corrMatrix) && corrMatrix.length) {
+      const N = corrMatrix.length;
+      let sum = 0; let count = 0;
+      for (let i = 0; i < N; i++) {
+        for (let j = i+1; j < N; j++) {
+          const v = Math.abs(Number(corrMatrix[i][j] ?? 0));
+          sum += v; count += 1;
+        }
+      }
+      mean_abs_corr = count ? sum / count : 0;
+    }
+  } catch (e) { mean_abs_corr = 0 }
+
+  // Correlation level thresholds
+  let corrLevel = 'low';
+  if (mean_abs_corr < 0.2) corrLevel = 'low';
+  else if (mean_abs_corr < 0.5) corrLevel = 'moderate';
+  else corrLevel = 'high';
+
+  // Sentiment impact: compute average |S| and pairwise sentiment-weighted change in mean correlation
+  let sentimentAdjusted = { summary: 'No sentiment data', impact: 'none', notes: [] };
+  try {
+    const sentiment = safe(payload.sentiment, null);
+    const adjustedCorr = safe(payload.adjusted_correlation && payload.adjusted_correlation.adjusted, null);
+    const rawCorrFromAdj = safe(payload.adjusted_correlation && payload.adjusted_correlation.raw, null);
+    if (!sentiment || !Array.isArray(sentiment) && typeof sentiment === 'object' && Object.keys(sentiment).length === 0) {
+      sentimentAdjusted = { summary: 'No sentiment data', impact: 'none', notes: ['No sentiment available for this analysis'] };
+    } else {
+      // compute avg |S|
+      let svals = [];
+      if (Array.isArray(sentiment)) svals = sentiment.map(s=>Math.abs(Number(s)||0));
+      else if (typeof sentiment === 'object') svals = Object.values(sentiment).map(s=>Math.abs(Number(s)||0));
+      const avgAbsS = svals.length ? svals.reduce((a,b)=>a+b,0)/svals.length : 0;
+
+      // compute mean_abs_corr for adjusted and raw (pairwise)
+      const meanAbs = (m) => {
+        try {
+          if (!m || !m.length) return 0;
+          const N = m.length; let sum=0, count=0;
+          for (let i=0;i<N;i++) for (let j=i+1;j<N;j++){ sum += Math.abs(Number(m[i][j]||0)); count++; }
+          return count? sum/count:0;
+        } catch(e){ return 0 }
+      };
+      const rawMean = meanAbs(rawCorrFromAdj || corrMatrix);
+      const adjMean = meanAbs(adjustedCorr || rawCorrFromAdj || corrMatrix);
+      const change = Math.abs(adjMean - rawMean);
+
+      let impact = 'none';
+      if (change < 0.01) impact = 'none';
+      else if (change < 0.03) impact = 'small';
+      else if (change < 0.06) impact = 'medium';
+      else impact = 'large';
+
+      const summary = `News sentiment ${impact === 'none' ? 'had almost no effect on how stocks move together' : (impact === 'small' ? 'slightly influenced stock relationships' : (impact === 'medium'? 'moderately changed stock relationships' : 'strongly affected how stocks move together'))}.`;
+      const notes = [
+        impact === 'none' ? 'Market news is not driving stock relationships right now' : 'Recent news is affecting how stocks correlate',
+        change < 0.01 ? 'Very minimal change in correlations' : (change < 0.03 ? 'Small shift in how stocks move together' : 'Noticeable change in stock relationships')
+      ];
+      if (sample_size && sample_size < 30) notes.push('Not much data — take these insights with caution');
+      sentimentAdjusted = { summary, impact, notes };
+    }
+  } catch (e) { sentimentAdjusted = { summary: 'No sentiment data', impact: 'none', notes: ['Sentiment processing failed'] } }
+
+  // RMT: compute Q and lambda bounds and noise fraction
+  let rmtHistogram = { summary: 'RMT data not available', noiseFraction: 0, lambda_plus: 0, notes: [] };
+  try {
+    const eigenvalues = safe(payload.rmt && payload.rmt.eigenvalues, null) || [];
+    const T = sample_size || Number(payload.rmt && payload.rmt.T) || 0;
+    const N = (payload.tickers && payload.tickers.length) || (eigenvalues.length || 0);
+    const Q = (N>0 && T>0) ? (T / N) : null;
+    const helper = (Qv) => {
+      const s = Math.sqrt(1/Math.max(Qv, 1e-12));
+      const lambda_plus = Math.pow(1 + s, 2);
+      const lambda_minus = Math.pow(1 - s, 2);
+      return { lambda_plus, lambda_minus };
+    };
+    if (Q && eigenvalues && eigenvalues.length) {
+      const { lambda_plus, lambda_minus } = helper(Q);
+      const within = eigenvalues.filter(l => l >= lambda_minus && l <= lambda_plus).length;
+      const noiseFraction = eigenvalues.length ? within / eigenvalues.length : 0;
+      let summary = 'Mixed real patterns and random noise';
+      if (noiseFraction > 0.8) summary = 'Mostly random noise — hard to find real patterns';
+      else if (noiseFraction > 0.5) summary = 'A lot of noise mixed with some real patterns';
+      else summary = 'Clear patterns detected — less random noise';
+      const notes = [
+        noiseFraction > 0.8 ? 'Most movements look random' : (noiseFraction > 0.5 ? 'Some real trends, some randomness' : 'Strong real patterns found'),
+        `About ${(noiseFraction * 100).toFixed(0)}% of the data is just noise`
+      ];
+      if (sample_size && sample_size < 30) notes.push('Not enough data — these numbers might be unreliable');
+      rmtHistogram = { summary, noiseFraction, lambda_plus, notes };
+    }
+  } catch (e) { /* leave default */ }
+
+  // Eigen-spectrum: top 3 eigenvalues and interpretations
+  let eigenSpectrum = { lambda1: 0, lambda2: 0, lambda3: 0, summary: 'Eigenvalues not available', factorInterpretation: [] };
+  try {
+    const eigenvalues = (payload.rmt && payload.rmt.eigenvalues) || [];
+    const sorted = [...eigenvalues].sort((a,b)=>b-a);
+    const l1 = sorted[0] || 0; const l2 = sorted[1] || 0; const l3 = sorted[2] || 0;
+    const lambda_plus = rmtHistogram.lambda_plus || (payload.rmt && payload.rmt.lambda_max) || 0;
+    const spread = l1 - l2;
+    let summary = '';
+    if (lambda_plus && l1 > lambda_plus * 1.05) summary = 'Strong market-wide trend — all stocks moving together';
+    else if (lambda_plus && l1 > lambda_plus) summary = 'Slight market-wide trend detected';
+    else summary = 'No clear market-wide trend — stocks moving independently';
+    const factorInterpretation = [];
+    if (l1 > lambda_plus * 1.05) factorInterpretation.push('Market acting as one — many stocks moving in sync');
+    else if (l1 > lambda_plus) factorInterpretation.push('Weak market trend present');
+    else factorInterpretation.push('Stocks moving independently — no strong common trend');
+    if (spread > 0.3) factorInterpretation.push('One dominant factor controls most price movements');
+    else factorInterpretation.push('Multiple factors at play — no single dominant force');
+    eigenSpectrum = { lambda1: l1, lambda2: l2, lambda3: l3, summary, factorInterpretation };
+  } catch (e) { /* noop */ }
+
+  // Stress gauge mapping
+  let stressGauge = { value: 0, regime: 'calm', explanation: '' };
+  try {
+    const lambda1 = eigenSpectrum.lambda1 || (payload.rmt && Math.max(...(payload.rmt.eigenvalues||[]))) || 0;
+    const lambda_plus = rmtHistogram.lambda_plus || (payload.rmt && payload.rmt.lambda_max) || 0;
+    let regime = 'calm';
+    if (lambda_plus && lambda1 < 0.95 * lambda_plus) regime = 'calm';
+    else if (lambda_plus && lambda1 <= 1.05 * lambda_plus) regime = 'normal';
+    else if (lambda_plus && lambda1 > 1.05 * lambda_plus) regime = 'stress';
+    const explanation = regime === 'calm' ? 'Market looks stable — stocks moving fairly independently' : (regime === 'normal' ? 'Normal market conditions — moderate stock synchronization' : 'High market stress — many stocks moving together (could signal panic or herd behavior)');
+    stressGauge = { value: lambda1, regime, explanation };
+  } catch (e) { /* noop */ }
+
+  // Combined headline + actions
+  let headline = '';
+  try {
+    const parts = [];
+    // short phrases
+    parts.push((corrLevel === 'low') ? 'Stocks moving independently' : (corrLevel === 'moderate' ? 'Moderate stock connections' : 'Strong market-wide movement'));
+    if (sentimentAdjusted && sentimentAdjusted.impact && sentimentAdjusted.impact !== 'none') parts.push(`news sentiment adding ${sentimentAdjusted.impact} influence`);
+    else parts.push('news not having much effect');
+    if (stressGauge && stressGauge.regime === 'stress') parts.push('high market stress detected');
+    headline = parts.join('; ') + '.';
+  } catch (e) { headline = 'No clear conclusion'; }
+  const actions = [
+    'Watch for emerging patterns — check how stocks are moving together',
+    'Run individual stock volatility checks (GARCH models)',
+    'Consider reducing risk if market stress continues'
+  ];
+  if (sentimentAdjusted && sentimentAdjusted.impact === 'large') actions.unshift('Check the news — sentiment is having a big effect on prices');
+
+  // Raw correlation block
+  const rawCorrelation = {
+    summary: `On average, stocks are ${corrLevel === 'low' ? 'moving mostly independently (weak connection)' : (corrLevel === 'moderate' ? 'showing some connection — about 30-50%' : 'moving together strongly — highly synchronized')}.`,
+    level: corrLevel,
+    notes: [
+      `Average correlation strength: ${(mean_abs_corr * 100).toFixed(0)}%`,
+      sample_size ? `Based on ${sample_size} data points` : 'Sample size unknown',
+    ]
+  };
+
+  return {
+    rawCorrelation,
+    sentimentAdjusted,
+    rmtHistogram,
+    eigenSpectrum,
+    stressGauge,
+    combined: { headline, actions },
+    sample_size
+  };
+}
 
 const Dashboard = () => {
   const navigate = useNavigate();
@@ -28,6 +212,10 @@ const Dashboard = () => {
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [analysisError, setAnalysisError] = useState('');
   const [analysis, setAnalysis] = useState(null);
+  // Inference UI state
+  const [inferenceData, setInferenceData] = useState(null);
+  const [inferenceOpen, setInferenceOpen] = useState(true);
+  const [expandedCard, setExpandedCard] = useState(null);
   // Hybrid forecast state
   const [hybridLoading, setHybridLoading] = useState(false);
   const [hybridError, setHybridError] = useState('');
@@ -38,6 +226,55 @@ const Dashboard = () => {
   const [hybridTicker, setHybridTicker] = useState(null);
 
   const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000/api';
+
+  // Recompute inferences when analysis updates
+  useEffect(() => {
+    if (!analysis) {
+      setInferenceData(null);
+      return;
+    }
+    try {
+      const inf = generateInferences(analysis);
+      setInferenceData(inf);
+    } catch (e) {
+      console.warn('Inference generation failed', e);
+      setInferenceData(null);
+    }
+  }, [analysis]);
+
+  // UI helpers
+  const pillColor = (type, value) => {
+    // type: 'corr','sentiment','rmt','eigen','stress'
+    // Map using rules: calm/none/low -> green, moderate/small/borderline -> yellow, high/large/stress -> red
+    if (type === 'corr') {
+      if (value === 'low') return 'bg-green-100 text-green-700';
+      if (value === 'moderate') return 'bg-yellow-100 text-yellow-800';
+      return 'bg-red-100 text-red-700';
+    }
+    if (type === 'sentiment') {
+      if (value === 'none') return 'bg-green-100 text-green-700';
+      if (value === 'small' || value === 'medium') return 'bg-yellow-100 text-yellow-800';
+      return 'bg-red-100 text-red-700';
+    }
+    if (type === 'rmt') {
+      // value is noiseFraction
+      if (value > 0.8) return 'bg-green-100 text-green-700';
+      if (value > 0.5) return 'bg-yellow-100 text-yellow-800';
+      return 'bg-red-100 text-red-700';
+    }
+    if (type === 'stress') {
+      if (value === 'calm') return 'bg-green-100 text-green-700';
+      if (value === 'normal') return 'bg-yellow-100 text-yellow-800';
+      return 'bg-red-100 text-red-700';
+    }
+    return 'bg-gray-100 text-gray-700';
+  };
+
+  const copySummary = async () => {
+    if (!inferenceData) return;
+    const text = `${inferenceData.combined.headline}\n\nActions:\n- ${inferenceData.combined.actions.join('\n- ')}`;
+    try { await navigator.clipboard.writeText(text); } catch (e) { console.warn('Clipboard failed', e); }
+  };
 
   // Fetch data from backend
   const fetchData = async () => {
@@ -329,8 +566,139 @@ const Dashboard = () => {
                   <EigenSpectrum eigenvalues={analysis.rmt.eigenvalues} />
                   <div className="space-y-4">
                     <StressGauge lambda1={analysis.rmt.eigenvalues ? Math.max(...analysis.rmt.eigenvalues) : null} lambda2={analysis.rmt.eigenvalues ? (analysis.rmt.eigenvalues.length>1? analysis.rmt.eigenvalues.sort((a,b)=>b-a)[1]:0) : null} lambda_max={analysis.rmt.lambda_max} />
-                    <RmtInterpretation rmt={analysis.rmt} />
                   </div>
+                </div>
+
+                {/* Automated Inference panel */}
+                <div className="mt-6 bg-white rounded-2xl p-4 shadow-sm">
+                  <div className="flex items-start justify-between">
+                    <div className="flex items-center gap-3">
+                      <img src="/mnt/data/49ce1903-34f2-41f7-9102-f7a8dbd103fe.png" alt="thumb" className="w-12 h-12 rounded-md object-cover" />
+                      <div>
+                        <h3 className="text-lg font-semibold">Automated Inference</h3>
+                        <div className="text-sm text-gray-500">Concise, beginner-friendly summaries and suggested actions based on analysis results.</div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => setInferenceOpen(!inferenceOpen)} className="px-3 py-1 text-sm text-gray-600 hover:bg-gray-100 rounded">{inferenceOpen ? 'Collapse' : 'Expand'}</button>
+                      <button onClick={copySummary} className="px-3 py-1 bg-blue-600 text-white text-sm rounded">Copy summary</button>
+                    </div>
+                  </div>
+
+                  {inferenceData && inferenceOpen && (
+                    <div className="mt-4">
+                      {/* Validation banner if sample small */}
+                      {inferenceData.sample_size && inferenceData.sample_size < 30 && (
+                        <div className="mb-3 p-3 bg-red-50 border border-red-200 text-red-700 rounded">Validation sample small — interpret inferences cautiously.</div>
+                      )}
+
+                      <div className="mt-2 mb-4">
+                        <div className="text-xl font-semibold">{inferenceData.combined.headline}</div>
+                        <div className="text-sm text-gray-600 mt-1">{inferenceData.combined.actions.slice(0,3).join(' • ')}</div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                        {/* Raw correlation card */}
+                        <div className="bg-gray-50 border rounded-lg p-3">
+                          <div className="flex items-start justify-between">
+                            <div>
+                              <div className="text-sm font-medium">Raw correlation</div>
+                              <div className="text-xs text-gray-600 mt-1">{inferenceData.rawCorrelation.summary}</div>
+                            </div>
+                            <div className={`px-2 py-1 rounded-full text-xs font-semibold ${pillColor('corr', inferenceData.rawCorrelation.level)}`}>{inferenceData.rawCorrelation.level}</div>
+                          </div>
+                          <div className="mt-2">
+                            <button onClick={() => setExpandedCard(expandedCard === 'corr' ? null : 'corr')} className="text-sm text-gray-500">{expandedCard === 'corr' ? 'Hide' : 'Show notes'}</button>
+                            {expandedCard === 'corr' && (
+                              <ul className="mt-2 list-disc list-inside text-sm text-gray-700">
+                                {inferenceData.rawCorrelation.notes.map((n,i) => <li key={i}>{n}</li>)}
+                              </ul>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Sentiment-adjusted card */}
+                        <div className="bg-gray-50 border rounded-lg p-3">
+                          <div className="flex items-start justify-between">
+                            <div>
+                              <div className="text-sm font-medium">Sentiment-adjusted</div>
+                              <div className="text-xs text-gray-600 mt-1">{inferenceData.sentimentAdjusted.summary}</div>
+                            </div>
+                            <div className={`px-2 py-1 rounded-full text-xs font-semibold ${pillColor('sentiment', inferenceData.sentimentAdjusted.impact)}`}>{inferenceData.sentimentAdjusted.impact}</div>
+                          </div>
+                          <div className="mt-2">
+                            <button onClick={() => setExpandedCard(expandedCard === 'sent' ? null : 'sent')} className="text-sm text-gray-500">{expandedCard === 'sent' ? 'Hide' : 'Show notes'}</button>
+                            {expandedCard === 'sent' && (
+                              <ul className="mt-2 list-disc list-inside text-sm text-gray-700">
+                                {inferenceData.sentimentAdjusted.notes.map((n,i) => <li key={i}>{n}</li>)}
+                              </ul>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* RMT histogram card */}
+                        <div className="bg-gray-50 border rounded-lg p-3">
+                          <div className="flex items-start justify-between">
+                            <div>
+                              <div className="text-sm font-medium">RMT histogram</div>
+                              <div className="text-xs text-gray-600 mt-1">{inferenceData.rmtHistogram.summary}</div>
+                            </div>
+                            <div className={`px-2 py-1 rounded-full text-xs font-semibold ${pillColor('rmt', inferenceData.rmtHistogram.noiseFraction)}`}>{(inferenceData.rmtHistogram.noiseFraction*100).toFixed(0)}%</div>
+                          </div>
+                          <div className="mt-2">
+                            <button onClick={() => setExpandedCard(expandedCard === 'rmt' ? null : 'rmt')} className="text-sm text-gray-500">{expandedCard === 'rmt' ? 'Hide' : 'Show notes'}</button>
+                            {expandedCard === 'rmt' && (
+                              <ul className="mt-2 list-disc list-inside text-sm text-gray-700">
+                                {inferenceData.rmtHistogram.notes.map((n,i) => <li key={i}>{n}</li>)}
+                              </ul>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Eigen spectrum card */}
+                        <div className="bg-gray-50 border rounded-lg p-3">
+                          <div className="flex items-start justify-between">
+                            <div>
+                              <div className="text-sm font-medium">Eigen-spectrum</div>
+                              <div className="text-xs text-gray-600 mt-1">{inferenceData.eigenSpectrum.summary}</div>
+                            </div>
+                            <div className={`px-2 py-1 rounded-full text-xs font-semibold ${pillColor('corr', (inferenceData.eigenSpectrum.lambda1 > (inferenceData.rmtHistogram.lambda_plus||0) ? 'high' : 'low'))}`}>λ₁={inferenceData.eigenSpectrum.lambda1.toFixed(2)}</div>
+                          </div>
+                          <div className="mt-2">
+                            <button onClick={() => setExpandedCard(expandedCard === 'eig' ? null : 'eig')} className="text-sm text-gray-500">{expandedCard === 'eig' ? 'Hide' : 'Show notes'}</button>
+                            {expandedCard === 'eig' && (
+                              <ul className="mt-2 list-disc list-inside text-sm text-gray-700">
+                                {inferenceData.eigenSpectrum.factorInterpretation.map((n,i) => <li key={i}>{n}</li>)}
+                              </ul>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Stress gauge card */}
+                        <div className="bg-gray-50 border rounded-lg p-3">
+                          <div className="flex items-start justify-between">
+                            <div>
+                              <div className="text-sm font-medium">Stress gauge</div>
+                              <div className="text-xs text-gray-600 mt-1">{inferenceData.stressGauge.explanation}</div>
+                            </div>
+                            <div className={`px-2 py-1 rounded-full text-xs font-semibold ${pillColor('stress', inferenceData.stressGauge.regime)}`}>{inferenceData.stressGauge.regime}</div>
+                          </div>
+                          <div className="mt-2">
+                            <button onClick={() => setExpandedCard(expandedCard === 'stress' ? null : 'stress')} className="text-sm text-gray-500">{expandedCard === 'stress' ? 'Hide' : 'Show notes'}</button>
+                            {expandedCard === 'stress' && (
+                              <ul className="mt-2 list-disc list-inside text-sm text-gray-700">
+                                <li>λ₁ = {inferenceData.stressGauge.value.toFixed(3)}</li>
+                                <li>{inferenceData.stressGauge.explanation}</li>
+                              </ul>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  {!inferenceData && (
+                    <div className="mt-3 text-sm text-gray-600">RMT or sentiment data not available — run analysis with a larger window.</div>
+                  )}
                 </div>
 
                 {/* Predictions */}

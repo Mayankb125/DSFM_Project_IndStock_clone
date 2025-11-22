@@ -50,15 +50,20 @@ ARCH_AVAILABLE = True
 STATS_AVAILABLE = True
 try:
     from arch import arch_model
+    print("[OK] arch package imported successfully")
 except Exception as _e:
     ARCH_AVAILABLE = False
+    print(f"[WARNING] arch import failed: {_e}")
     def arch_model(*args, **kwargs):
         raise ImportError('arch package not installed or importable')
 
 try:
     from statsmodels.tsa.arima.model import ARIMA
+    STATS_AVAILABLE = True
+    print("[OK] statsmodels ARIMA imported successfully")
 except Exception as _e:
     STATS_AVAILABLE = False
+    print(f"[WARNING] statsmodels import failed: {_e}")
     class ARIMA:
         def __init__(self, *a, **k):
             raise ImportError('statsmodels not installed or importable')
@@ -468,8 +473,16 @@ def api_sentiment_adjusted_corr():
         for t in tickers:
             headlines = [n['title'] for n in news.get(t, []) if n.get('title')]
             if not headlines:
-                per_ticker_sent[t] = 0.0
-                per_ticker_examples[t] = []
+                # Fallback: proxy sentiment from recent returns if no headlines found
+                try:
+                    look = max(1, min(lookback_days, rets.shape[0]))
+                    mean_ret = float(rets[t].dropna().tail(look).mean()) if t in rets.columns else 0.0
+                    proxy = float(np.tanh(mean_ret * 10.0) * 0.5)
+                    per_ticker_sent[t] = proxy
+                    per_ticker_examples[t] = []
+                except Exception:
+                    per_ticker_sent[t] = 0.0
+                    per_ticker_examples[t] = []
                 continue
             sentiments = analyze_texts(headlines)
             avg = float(np.mean([s['score'] for s in sentiments])) if sentiments else 0.0
@@ -553,10 +566,22 @@ def api_analyze():
                 news = fetch_news_for_tickers(tickers, lookback_days=lookback_days)
                 for t in tickers:
                     heads = [n['title'] for n in news.get(t, []) if n.get('title')]
-                    sentiments = analyze_texts(heads) if heads else []
+                    if not heads:
+                        # fallback: proxy sentiment from recent returns when no headlines
+                        try:
+                            look = max(1, min(lookback_days, rets.shape[0]))
+                            mean_ret = float(rets[t].dropna().tail(look).mean()) if t in rets.columns else 0.0
+                            per_ticker_sent[t] = float(np.tanh(mean_ret * 10.0) * 0.5)
+                            per_ticker_examples[t] = []
+                        except Exception:
+                            per_ticker_sent[t] = 0.0
+                            per_ticker_examples[t] = []
+                        continue
+                    sentiments = analyze_texts(heads)
                     per_ticker_sent[t] = float(np.mean([s['score'] for s in sentiments])) if sentiments else 0.0
                     per_ticker_examples[t] = news.get(t, [])[:3]
             except Exception:
+                # news provider failed entirely — keep zero sentiments as fallback
                 pass
 
         # Adjusted correlation
